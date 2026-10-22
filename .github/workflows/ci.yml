@@ -1,0 +1,12 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install fastapi "uvicorn[standard]" python-multipart numpy soundfile scikit-learn faiss-cpu matplotlib pytest httpx
+      - run: python -m pytest -q -m "not slow"

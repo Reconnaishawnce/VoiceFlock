@@ -29,11 +29,24 @@ def init_db(path: Path | None = None) -> None:
     try:
         conn.executescript(_SCHEMA)
         conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('prints_version', '0')")
+        _migrate(conn)
         # Orphaned 'running' jobs from a crashed worker go back to the queue.
         conn.execute("UPDATE jobs SET status='queued', stage=NULL, worker=NULL WHERE status='running'")
         conn.execute("UPDATE sources SET status='queued' WHERE status='processing'")
     finally:
         conn.close()
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive migrations for databases created by older versions."""
+    if "feed_id" not in _columns(conn, "sources"):
+        conn.execute("ALTER TABLE sources ADD COLUMN feed_id INTEGER")
+    if "result" not in _columns(conn, "jobs"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
 
 
 @contextmanager

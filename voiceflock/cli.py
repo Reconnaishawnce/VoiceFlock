@@ -158,6 +158,66 @@ def cmd_cohort(a):
     print(f"\nadded {n} cohort embeddings (total explicit cohort: {total})")
 
 
+def cmd_rematch(a):
+    from .rematch import rematch
+    db.init_db()
+    conn = db.connect()
+    res = rematch(conn, a.source_ids or None, progress=lambda st, f: print(f"\r  {st} {f*100:.0f}%", end="", flush=True))
+    print("\n" + json.dumps(res))
+
+
+def cmd_selftest(a):
+    from .selftest import run
+    db.init_db()
+    conn = db.connect()
+    res = run(conn, progress=lambda st, f: print(f"  {st}", flush=True))
+    print(json.dumps(res, indent=2))
+    sys.exit(0 if res.get("ok") else 1)
+
+
+def cmd_feeds(a):
+    from . import feeds
+    db.init_db()
+    conn = db.connect()
+    if a.action == "add":
+        with db.tx(conn):
+            fid = feeds.add_feed(conn, a.url, a.mode, a.incognito, a.interval, a.backfill)
+        print(f"added feed #{fid}: {a.url}")
+        if a.poll:
+            r = feeds.poll_feed(conn, db.row(conn, "SELECT * FROM feeds WHERE id=?", (fid,)))
+            print(f"polled: {r}")
+    elif a.action == "poll":
+        for f in db.rows(conn, "SELECT * FROM feeds WHERE enabled=1" + (" AND id=?" if a.url else ""), (a.url,) if a.url else ()):
+            print(f"#{f['id']} {f['url']}: {feeds.poll_feed(conn, f)}")
+    elif a.action == "remove":
+        with db.tx(conn):
+            n = conn.execute("DELETE FROM feeds WHERE id=? OR url=?", (a.url, a.url)).rowcount
+        print(f"removed {n}")
+    else:
+        for f in db.rows(conn, "SELECT * FROM feeds ORDER BY id"):
+            print(f"#{f['id']:<4} {'on ' if f['enabled'] else 'off'} every {f['interval_min']}m  items={f['n_items']:<4} "
+                  f"last={f['last_checked_at'] or '-'}  {f['title'] or ''}  {f['url']}  {f['last_error'] or ''}")
+
+
+def cmd_export(a):
+    from . import transfer
+    db.init_db()
+    conn = db.connect()
+    if a.what == "gallery":
+        Path(a.out).write_text(transfer.dumps(transfer.export_gallery(conn, include_provisional=not a.named_only)))
+    else:
+        Path(a.out).write_text(transfer.matches_csv(conn))
+    print(f"wrote {a.out}")
+
+
+def cmd_import(a):
+    from . import transfer
+    db.init_db()
+    conn = db.connect()
+    stats = transfer.import_gallery(conn, json.loads(Path(a.file).read_text()))
+    print(json.dumps(stats))
+
+
 def cmd_persons(a):
     db.init_db()
     conn = db.connect()
@@ -216,7 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--replace-cohort", action="store_true", help="replace the explicit cohort with these speakers")
     s.set_defaults(fn=cmd_calibrate)
 
-    s = sub.add_parser("evaluate", help="rank-1 accuracy, DET curve, miss@1%FA on a labelled folder")
+    s = sub.add_parser("evaluate", help="rank-1 accuracy, DET curve, miss rate at 1%% false alarm on a labelled folder")
     s.add_argument("folder")
     s.add_argument("--out", default="eval_out")
     s.add_argument("--enroll-per-speaker", type=int, default=1)
@@ -227,6 +287,33 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("folder")
     s.add_argument("--replace", action="store_true")
     s.set_defaults(fn=cmd_cohort)
+
+    s = sub.add_parser("rematch", help="re-score processed recordings against the current gallery (no ML)")
+    s.add_argument("source_ids", nargs="*", type=int)
+    s.set_defaults(fn=cmd_rematch)
+
+    s = sub.add_parser("selftest", help="load both models and run them on synthetic audio")
+    s.set_defaults(fn=cmd_selftest)
+
+    s = sub.add_parser("feeds", help="watch RSS/Atom feeds: list | add URL | poll [ID] | remove ID|URL")
+    s.add_argument("action", nargs="?", default="list", choices=["list", "add", "poll", "remove"])
+    s.add_argument("url", nargs="?")
+    s.add_argument("--mode", choices=["bulk", "match"], default="bulk")
+    s.add_argument("--incognito", action="store_true")
+    s.add_argument("--interval", type=int, default=60, help="minutes between polls")
+    s.add_argument("--backfill", type=int, default=3, help="existing episodes to grab on first poll")
+    s.add_argument("--poll", action="store_true", help="poll right after adding")
+    s.set_defaults(fn=cmd_feeds)
+
+    s = sub.add_parser("export", help="export the gallery (JSON) or all matches (CSV)")
+    s.add_argument("what", choices=["gallery", "matches"])
+    s.add_argument("out")
+    s.add_argument("--named-only", action="store_true")
+    s.set_defaults(fn=cmd_export)
+
+    s = sub.add_parser("import", help="import a gallery JSON export (merges people by name)")
+    s.add_argument("file")
+    s.set_defaults(fn=cmd_import)
 
     s = sub.add_parser("persons", help="list people / unknown voices")
     s.set_defaults(fn=cmd_persons)

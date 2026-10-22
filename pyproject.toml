@@ -38,3 +38,4 @@ voiceflock = ["static/*", "schema.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: needs the real embedding model (downloads ~80 MB)"]

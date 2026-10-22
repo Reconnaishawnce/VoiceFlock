@@ -65,9 +65,9 @@ def test_upload_creates_source_and_job(client):
     jobs = client.get("/api/jobs").json()["jobs"]
     assert jobs[0]["source_id"] == src["id"]
     # enroll without a name is rejected
-    r = client.post("/api/upload", data={"mode": "enroll"}, files=[("files", ("a.wav", wav_bytes(), "audio/wav"))])
+    r = client.post("/api/upload", data={"mode": "enroll"}, files=[("files", ("a.wav", wav_bytes(1.0), "audio/wav"))])
     assert r.status_code == 400
-    r = client.post("/api/upload", data={"mode": "enroll", "person_name": "Carol"}, files=[("files", ("a.wav", wav_bytes(), "audio/wav"))])
+    r = client.post("/api/upload", data={"mode": "enroll", "person_name": "Carol"}, files=[("files", ("a.wav", wav_bytes(1.5), "audio/wav"))])
     assert r.status_code == 200
     persons = client.get("/api/persons").json()["persons"]
     assert [p["name"] for p in persons] == ["Carol"]
@@ -110,7 +110,7 @@ def test_confirm_reject_name_undo_alerts(client, conn):
     assert dave["n_prints"] >= 1 and dave["n_sources"] == 1
 
     # forget the source -> Dave keeps existing (named) but loses the prints from this recording
-    r = client.post(f"/api/sources/{sid}/forget").json()
+    client.post(f"/api/sources/{sid}/forget")
     assert conn.execute("SELECT COUNT(*) FROM prints WHERE source_id=?", (sid,)).fetchone()[0] == 0
     assert client.get(f"/api/sources/{sid}").json()["incognito"] == 1
 

@@ -6,6 +6,8 @@ const fmtT = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(
 const pct = (p) => (p * 100).toFixed(1) + "%";
 const probCls = (p, thr, hi) => p >= hi ? "hi" : p >= thr ? "mid" : "lo";
 let SETTINGS = {}, SPECS = {}, STATE = { tab: "bulk", matchSource: null, sourceDetail: null, personDetail: null };
+const COLORS = ["#5ad1a8", "#3f8cff", "#f2b84b", "#ef6b6b", "#b07cff", "#4fd1e0", "#ff9f5a", "#9ad15a", "#ff6fb5", "#c9c9c9"];
+const elapsed = (iso) => { if (!iso) return ""; const s = Math.max(0, (Date.now() - Date.parse(iso + (iso.endsWith("Z") ? "" : "Z"))) / 1000); return fmtT(s); };
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts, body: opts.body && typeof opts.body !== "string" ? JSON.stringify(opts.body) : opts.body });
@@ -22,11 +24,12 @@ function showTab(name) {
   STATE.tab = name;
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== "tab-" + name));
-  location.hash = name;
+  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
   refreshTab();
 }
+window.addEventListener("hashchange", () => { const t = location.hash.replace("#", ""); if (t && t !== STATE.tab && $(`#tab-${t}`)) showTab(t); });
 function refreshTab() {
-  ({ bulk: loadAlerts, build: loadBuild, match: loadMatch, sources: loadSources, settings: loadSettings })[STATE.tab]?.();
+  ({ bulk: () => { loadAlerts(); loadFeeds(); }, build: loadBuild, match: loadMatch, sources: loadSources, settings: loadSettings })[STATE.tab]?.();
 }
 
 /* ---------------- header ---------------- */
@@ -71,6 +74,7 @@ function uploadFiles(files, mode, listId, opts) {
       if (xhr.status >= 300) { row.querySelector(".st").textContent = "failed"; return onErr(new Error(xhr.responseText)); }
       const j = JSON.parse(xhr.responseText); const c = j.created[0];
       if (c.error) { row.querySelector(".st").textContent = c.error; return; }
+      if (c.duplicate_of) { row.querySelector(".st").innerHTML = `already processed as <a class="link" onclick="openSource(${c.duplicate_of})">${esc(c.duplicate_name)}</a>`; return; }
       row.dataset.source = c.source_id; row.querySelector(".st").textContent = "queued";
       if (mode === "match") { STATE.matchSource = c.source_id; }
       toast(`Queued ${f.name}`); loadStats();
@@ -85,7 +89,9 @@ async function queueUrl(inputId, mode, opts = {}) {
     const body = { url, mode, incognito: opts.incognito ? !!opts.incognito() : false };
     if (opts.personName) { body.person_name = opts.personName(); if (!body.person_name) throw new Error("name required"); }
     const r = await api("/api/upload_url", { method: "POST", body });
-    $(inputId).value = ""; toast("Queued URL as source #" + r.source_id);
+    $(inputId).value = "";
+    if (r.duplicate_of) { toast(`Already processed: ${r.duplicate_name}`); openSource(r.duplicate_of); return; }
+    toast("Queued URL as source #" + r.source_id);
     if (mode === "match") STATE.matchSource = r.source_id;
     loadStats();
   } catch (e) { onErr(e); }
@@ -133,7 +139,31 @@ function candidateTable(sp, src) {
         <td class="sub">${heardIn(c.heard_in)}</td><td>${act}</td></tr>`;
     }).join("") + `</table>`;
 }
-function speakerCard(sp, src) {
+function qualityWarning(sp) {
+  const w = [];
+  if ((sp.speech_seconds || 0) < 10) w.push("under 10 s of speech");
+  if ((sp.snr_db ?? 99) < 10) w.push("low SNR");
+  if ((sp.clip_fraction || 0) > 0.01) w.push("clipping");
+  if ((sp.quality_score ?? 100) < 40 && !w.length) w.push("low quality");
+  return w.length ? `<div class="warnbox">Low-confidence clip (${w.join(", ")}): treat the probabilities with caution.</div>` : "";
+}
+function segChips(sp, src, color) {
+  const segs = (sp.segments || []).slice(0, 12);
+  if (!segs.length || !src.has_audio) return "";
+  return `<div class="chips"><span class="sw" style="background:${color}"></span>` + segs.map((g) => `<button onclick="seek(${src.id}, ${g.start_s})">${fmtT(g.start_s)}</button>`).join("") + (sp.segments.length > 12 ? `<span class="muted">+${sp.segments.length - 12} more</span>` : "") + `</div>`;
+}
+function timeline(src) {
+  if (!src.duration_s || !(src.speakers || []).length) return "";
+  const d = src.duration_s;
+  const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s})"></div>`).join("")).join("");
+  const legend = src.speakers.map((sp, i) => `<span><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}</span>`).join("");
+  return `<div class="timeline" id="tl-${src.id}" onclick="seekFrac(${src.id}, event)">${segs}<div class="cursor" style="left:0"></div></div><div class="tl-legend">${legend}</div>`;
+}
+function seek(sid, t) { const a = $(`#aud-${sid}`); if (!a) return; a.currentTime = t; a.play().catch(() => {}); a.scrollIntoView({ block: "nearest" }); }
+function seekFrac(sid, ev) { const tl = $(`#tl-${sid}`), a = $(`#aud-${sid}`); if (!tl || !a || !a.duration) return; const r = tl.getBoundingClientRect(); seek(sid, ((ev.clientX - r.left) / r.width) * a.duration); }
+document.addEventListener("timeupdate", (e) => { const a = e.target; if (!(a instanceof HTMLAudioElement) || !a.id.startsWith("aud-")) return; const c = $(`#tl-${a.id.slice(4)} .cursor`); if (c && a.duration) c.style.left = (a.currentTime / a.duration) * 100 + "%"; }, true);
+function speakerCard(sp, src, idx = 0) {
+  const color = COLORS[idx % COLORS.length];
   const thr = Number(src.settings?.match_threshold ?? SETTINGS.match_threshold ?? 0.75);
   const top = sp.candidates[0];
   let verdict;
@@ -143,10 +173,12 @@ function speakerCard(sp, src) {
   else if (sp.person && sp.person.kind === "provisional") verdict = `Unnamed voice: <b>${esc(sp.person.name)}</b> <span class="muted">(not matched to anyone known)</span>`;
   else if (src.incognito) verdict = `<b>Unknown</b> <span class="muted">(incognito: not saved)</span>`;
   else verdict = `<b>Unknown</b> <span class="muted">(below threshold${top ? `, best ${esc(top.person_name)} ${pct(top.probability)}` : ""})</span>`;
-  return `<div class="spk" id="spk-${sp.id}">
+  return `<div class="spk" id="spk-${sp.id}" style="border-left:3px solid ${color}">
     <div class="hdr"><div><span class="title">${esc(sp.label)}</span> · ${verdict}</div>
       <div class="q">speech <b>${fmtT(sp.speech_seconds)}</b> · quality <b>${sp.quality_score?.toFixed(0) ?? "-"}</b>/100 · SNR <b>${sp.snr_db?.toFixed(0) ?? "-"} dB</b> · ${sp.n_segments} turns · first at ${fmtT(sp.first_start_s)}</div></div>
     ${sp.clip_url ? `<audio controls preload="none" src="${sp.clip_url}"></audio>` : `<div class="muted">no preview clip (incognito)</div>`}
+    ${segChips(sp, src, color)}
+    ${qualityWarning(sp)}
     ${candidateTable(sp, src)}
     <div class="actions">
       <input placeholder="Name this voice…" list="person-names" id="nm-${sp.id}" style="max-width:240px">
@@ -161,13 +193,14 @@ function sourceView(src) {
   const err = src.error ? `<div class="warnbox">${esc(src.error)}</div>` : "";
   return `<div class="hdr"><h2>${esc(src.name)} ${st}${inc} <span class="pill">${src.mode}</span></h2>
     <div class="q">${src.duration_s ? fmtT(src.duration_s) : ""} · ${src.n_speakers ?? "?"} speakers · uploaded ${esc((src.created_at || "").slice(0, 16).replace("T", " "))}</div></div>${job}${err}
-    ${src.has_audio ? `<audio controls preload="none" src="/api/sources/${src.id}/audio"></audio>` : ""}
+    ${src.has_audio ? `<audio controls preload="none" id="aud-${src.id}" src="/api/sources/${src.id}/audio" style="max-width:100%"></audio>` : ""}
+    ${timeline(src)}
     <div class="actions">
       ${src.incognito ? "" : `<button class="small" onclick="forgetSource(${src.id})" title="Remove everything this recording added to the voice database">Forget voices from this file</button>`}
       <button class="small" onclick="reprocess(${src.id})">Reprocess</button>
       <button class="small danger" onclick="deleteSource(${src.id})">Delete recording</button>
     </div>
-    ${(src.speakers || []).map((sp) => speakerCard(sp, src)).join("") || (src.status === "done" ? '<p class="muted">No speakers passed the minimum speech length.</p>' : "")}`;
+    ${(src.speakers || []).map((sp, i) => speakerCard(sp, src, i)).join("") || (src.status === "done" ? '<p class="muted">No speakers passed the minimum speech length.</p>' : "")}`;
 }
 
 /* ---------------- actions ---------------- */
@@ -226,6 +259,31 @@ async function loadAlerts() {
   } catch (e) { onErr(e); }
 }
 
+/* ---------------- feeds ---------------- */
+async function loadFeeds() {
+  try {
+    const j = await api("/api/feeds");
+    $("#feeds-count").textContent = j.feeds.length ? `(${j.feeds.length})` : "";
+    $("#feeds").innerHTML = j.feeds.map((f) => `<div class="item">
+      <div class="title">${esc(f.title || f.url)} <span class="pill">${f.mode}</span>${f.incognito ? '<span class="pill">incognito</span>' : ""}${f.enabled ? "" : '<span class="pill failed">paused</span>'}</div>
+      <div class="sub">${esc(f.url)}<br>${f.n_items} items · every ${f.interval_min} min · last check ${f.last_checked_at ? esc(f.last_checked_at.slice(0, 16).replace("T", " ")) : "never"}${f.last_error ? `<div class="warnbox">${esc(f.last_error)}</div>` : ""}</div>
+      ${f.recent.map((r) => `<div class="sub">· ${r.source_id ? `<a class="link" onclick="openSource(${r.source_id})">${esc(r.title || r.url)}</a> <span class="pill ${r.source_status || ""}">${r.source_status || ""}</span>` : `<span class="muted">${esc(r.title || r.url)} (skipped)</span>`}</div>`).join("")}
+      <div class="actions"><button class="small" onclick="pollFeed(${f.id})">Check now</button><button class="small" onclick="toggleFeed(${f.id}, ${f.enabled ? "false" : "true"})">${f.enabled ? "Pause" : "Resume"}</button><button class="small danger" onclick="deleteFeed(${f.id})">Remove</button></div></div>`).join("") || '<p class="muted">No feeds yet.</p>';
+  } catch (e) { onErr(e); }
+}
+$("#btn-add-feed").onclick = async () => {
+  const url = $("#feed-url").value.trim(); if (!url) return;
+  try {
+    const f = await api("/api/feeds", { method: "POST", body: { url, mode: $("#feed-mode").value, incognito: $("#feed-incognito").checked, interval_min: Number($("#feed-interval").value || 60), backfill: Number($("#feed-backfill").value || 0) } });
+    $("#feed-url").value = ""; toast("Feed added; checking now…"); loadFeeds();
+    try { const r = await api(`/api/feeds/${f.id}/poll`, { method: "POST" }); toast(`Feed OK: queued ${r.queued} episode(s)`); } catch (e) { onErr(e); }
+    loadFeeds(); loadStats();
+  } catch (e) { onErr(e); }
+};
+async function pollFeed(id) { try { const r = await api(`/api/feeds/${id}/poll`, { method: "POST" }); toast(`Queued ${r.queued} new`); loadFeeds(); loadStats(); } catch (e) { onErr(e); } }
+async function toggleFeed(id, enabled) { try { await api(`/api/feeds/${id}`, { method: "PATCH", body: { enabled } }); loadFeeds(); } catch (e) { onErr(e); } }
+async function deleteFeed(id) { if (!confirm("Stop watching this feed? Already-downloaded recordings stay.")) return; try { await api(`/api/feeds/${id}`, { method: "DELETE" }); loadFeeds(); } catch (e) { onErr(e); } }
+
 /* ---------------- build database ---------------- */
 async function loadBuild() {
   try {
@@ -277,9 +335,11 @@ async function loadMatch() {
 /* ---------------- sources & queue ---------------- */
 async function loadSources() {
   try {
-    const [j, q] = await Promise.all([api("/api/sources?limit=200"), api("/api/jobs?limit=50")]);
-    $("#jobs").innerHTML = q.jobs.filter((x) => x.status !== "cancelled").slice(0, 30).map((x) => `<div class="item"><span class="pill ${x.status}">${x.status}</span> <a class="link" onclick="openSource(${x.source_id})">${esc(x.source_name || "#" + x.source_id)}</a>
-      <div class="sub">${x.status === "running" ? `${esc(x.stage || "")} ${Math.round(x.progress)}%<div class="bar"><i style="width:${x.progress}%"></i></div>` : x.status === "failed" ? `<span class="warnbox">${esc(x.error)}</span> <button class="small" onclick="retryJob(${x.id})">retry</button>` : x.status === "queued" ? `<button class="small" onclick="cancelJob(${x.id})">cancel</button>` : esc((x.finished_at || "").slice(0, 16).replace("T", " "))}</div></div>`).join("") || '<p class="muted">Queue is empty.</p>';
+    const qs = encodeURIComponent($("#source-search").value.trim());
+    const [j, q] = await Promise.all([api(`/api/sources?limit=200&q=${qs}`), api("/api/jobs?limit=50")]);
+    const jobLabel = (x) => x.type === "process_source" ? `<a class="link" onclick="openSource(${x.source_id})">${esc(x.source_name || "#" + x.source_id)}</a>` : `<b>${esc(x.type)}</b>${x.source_id ? " #" + x.source_id : ""}`;
+    $("#jobs").innerHTML = q.jobs.filter((x) => x.status !== "cancelled").slice(0, 30).map((x) => `<div class="item"><span class="pill ${x.status}">${x.status}</span> ${jobLabel(x)}
+      <div class="sub">${x.status === "running" ? `${esc(x.stage || "")} ${Math.round(x.progress)}% · ${elapsed(x.started_at)} elapsed<div class="bar"><i style="width:${x.progress}%"></i></div>` : x.status === "failed" ? `<span class="warnbox">${esc(x.error)}</span> ${x.type === "process_source" ? `<button class="small" onclick="retryJob(${x.id})">retry</button>` : ""}` : x.status === "queued" ? `<button class="small" onclick="cancelJob(${x.id})">cancel</button>` : `${esc((x.finished_at || "").slice(0, 16).replace("T", " "))}${x.type === "rematch" && x.result ? " · " + esc(x.result) : ""}`}</div></div>`).join("") || '<p class="muted">Queue is empty.</p>';
     $("#sources").innerHTML = `<table><tr><th>Recording</th><th>Mode</th><th>Status</th><th>Length</th><th>Speakers</th><th></th></tr>` + j.sources.map((s) => `<tr>
       <td><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a>${s.incognito ? '<span class="pill">incognito</span>' : ""}</td><td>${s.mode}</td>
       <td><span class="pill ${s.status}">${s.status}</span>${s.job && s.job.status === "running" ? ` <span class="muted">${Math.round(s.job.progress)}%</span>` : ""}</td>
@@ -290,6 +350,8 @@ async function loadSources() {
     else $("#source-detail").classList.add("hidden");
   } catch (e) { onErr(e); }
 }
+$("#source-search").addEventListener("input", () => { clearTimeout(STATE._st); STATE._st = setTimeout(loadSources, 250); });
+$("#btn-rematch").onclick = async () => { try { await api("/api/rematch", { method: "POST", body: {} }); toast("Re-match queued"); loadSources(); } catch (e) { onErr(e); } };
 async function retryJob(id) { try { await api(`/api/jobs/${id}/retry`, { method: "POST" }); loadSources(); } catch (e) { onErr(e); } }
 async function cancelJob(id) { try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); loadSources(); } catch (e) { onErr(e); } }
 
@@ -302,10 +364,28 @@ async function loadSettings() {
     f.innerHTML = Object.entries(groups).map(([g, keys]) => `<div class="grp">${g}</div>` + keys.map((k) => { const s = SPECS[k], v = SETTINGS[k];
       const input = s.type === "bool" ? `<input type="checkbox" name="${k}" ${v ? "checked" : ""}>` : s.type === "secret" ? `<input type="password" name="${k}" value="${esc(v)}" autocomplete="off">` : s.type === "float" ? `<input type="number" step="0.01" name="${k}" value="${v}">` : s.type === "int" ? `<input type="number" step="1" name="${k}" value="${v}">` : `<input name="${k}" value="${esc(v)}">`;
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
+    renderSelftest();
     const st = await api("/api/stats");
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort size ${st.cohort_size}, min ${SETTINGS.cohort_min_size})\ncalibration: ${st.calibrated ? "fitted by `voiceflock calibrate`" : "defaults"}  raw a=${st.calibration.raw.a.toFixed(3)} b=${st.calibration.raw.b.toFixed(3)}  snorm a=${st.calibration.snorm.a.toFixed(3)} b=${st.calibration.snorm.b.toFixed(3)}`;
   } catch (e) { onErr(e); }
 }
+async function renderSelftest() {
+  const { job } = await api("/api/selftest").catch(() => ({ job: null }));
+  const st = $("#selftest-status"), out = $("#selftest-result");
+  if (!job) { st.textContent = "never run"; out.textContent = ""; return; }
+  st.innerHTML = `<span class="pill ${job.status}">${job.status}</span> ${job.status === "running" ? esc(job.stage || "") + " · " + elapsed(job.started_at) : esc((job.finished_at || job.created_at || "").slice(0, 16).replace("T", " "))}`;
+  const r = job.result || {};
+  out.textContent = job.status === "failed" ? (job.error || "") + "\n" + (r.traceback || "") : job.status === "done"
+    ? `OK on ${r.device}: embedder load ${r.embedder_load_s}s, diarizer load ${r.diarizer_load_s}s (${r.diarization_pipeline_loaded}), 8 s test diarized in ${r.diarize_s}s (${r.realtime_factor}x realtime), ${r.n_speakers} speakers / ${r.n_turns} turns` : "";
+}
+$("#btn-selftest").onclick = async () => { try { await api("/api/selftest", { method: "POST" }); toast("Self-test queued (first run downloads models)"); renderSelftest(); } catch (e) { onErr(e); } };
+$("#import-gallery").addEventListener("change", async () => {
+  const f = $("#import-gallery").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { const r = await fetch("/api/import/gallery", { method: "POST", body: fd }); const j = await r.json(); if (!r.ok) throw new Error(j.detail);
+    $("#import-msg").textContent = `imported: ${j.persons_created} new people, ${j.persons_merged} merged, ${j.prints} prints`; loadStats(); } catch (e) { onErr(e); }
+  $("#import-gallery").value = "";
+});
 $("#btn-save-settings").onclick = async (e) => {
   e.preventDefault();
   const body = {}; $$("#settings-form [name]").forEach((i) => { body[i.name] = i.type === "checkbox" ? i.checked : i.value; });
@@ -322,7 +402,7 @@ $("#btn-save-settings").onclick = async (e) => {
   let lastBusy = 0;
   setInterval(async () => {
     const busy = await loadStats(); updateUploadRows();
-    if (busy || lastBusy) { if (STATE.tab !== "settings" && !document.activeElement?.matches("input,select,textarea")) refreshTab(); }
+    if (busy || lastBusy) { if (STATE.tab === "settings") renderSelftest(); else if (!document.activeElement?.matches("input,select,textarea")) refreshTab(); }
     lastBusy = busy;
   }, 3000);
 })();

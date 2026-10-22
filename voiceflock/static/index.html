@@ -34,6 +34,17 @@
         <label class="chk"><input type="checkbox" id="inc-bulk"> Incognito: match only, don't save any voices from these files</label>
         <div id="upl-bulk" class="uploads"></div>
       </div>
+      <div class="card col narrow">
+        <h2>Watched feeds <span class="muted" id="feeds-count"></span></h2>
+        <p class="muted">Podcast RSS or a YouTube channel feed. New episodes are downloaded and scanned automatically.</p>
+        <input id="feed-url" placeholder="https://feeds.example.com/podcast.xml">
+        <div class="inline"><select id="feed-mode" style="max-width:120px"><option value="bulk">bulk scan</option><option value="match">match only</option></select>
+          <input id="feed-interval" type="number" min="5" value="60" title="poll interval (minutes)" style="max-width:90px"> <span class="muted" style="align-self:center">min</span>
+          <input id="feed-backfill" type="number" min="0" value="3" title="existing episodes to grab now" style="max-width:70px"> <span class="muted" style="align-self:center">back</span>
+          <button class="primary" id="btn-add-feed">Watch</button></div>
+        <label class="chk"><input type="checkbox" id="feed-incognito"> Incognito feed</label>
+        <div id="feeds"></div>
+      </div>
     </div>
     <div class="row">
       <div class="card col">
@@ -97,7 +108,10 @@
         <div id="jobs"></div>
       </div>
       <div class="card col">
-        <h2>Sources</h2>
+        <div class="hdr"><h2>Sources</h2>
+          <div class="actions" style="margin:0"><input id="source-search" placeholder="search name / URL / person" style="max-width:260px">
+            <button class="small" id="btn-rematch" title="Re-score every recording against the current gallery (fast, no ML)">Re-match all</button>
+            <a class="link" href="/api/export/matches.csv">Export matches CSV</a></div></div>
         <div id="sources"></div>
       </div>
     </div>
@@ -110,6 +124,14 @@
       <h2>Settings</h2>
       <form id="settings-form"></form>
       <div class="actions"><button id="btn-save-settings" class="primary">Save</button> <span id="settings-msg" class="muted"></span></div>
+      <h3>Model self-test</h3>
+      <p class="muted">Loads both models and runs them on 8 s of synthetic audio. Run this once after setting the token; the first run downloads the models.</p>
+      <div class="actions"><button id="btn-selftest">Run self-test</button> <span id="selftest-status" class="muted"></span></div>
+      <pre id="selftest-result" class="muted"></pre>
+      <h3>Backup &amp; transfer</h3>
+      <p class="muted">The whole app lives in the <code>data</code> folder. For moving voices between machines: <a class="link" href="/api/export/gallery.json">export gallery JSON</a>
+        or import one: <label class="link">choose file<input type="file" id="import-gallery" accept="application/json" hidden></label> <span id="import-msg" class="muted"></span></p>
+      <p class="muted">Set <code>VOICEFLOCK_PASSWORD</code> in <code>.env</code> to require a password when the server is reachable from other devices.</p>
       <h3>Calibration &amp; evaluation</h3>
       <p class="muted">Run from the command line (see README): <code>voiceflock calibrate &lt;folder&gt;</code> fits the probability calibration and
         cohort from labelled clips; <code>voiceflock evaluate &lt;folder&gt;</code> reports rank-1 accuracy, EER, DET curve and miss rate at 1% false alarm.</p>

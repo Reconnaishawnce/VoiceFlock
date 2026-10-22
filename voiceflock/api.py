@@ -1,20 +1,24 @@
 """FastAPI app: JSON API + static single-page UI."""
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import os
 import re
+import secrets
 import shutil
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, audio, config, db, gallery, worker
+from . import __version__, audio, config, db, feeds, gallery, transfer, worker
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -40,6 +44,26 @@ class MergeIn(BaseModel):
 class NameIn(BaseModel):
     name: str | None = None
     person_id: int | None = None
+
+
+class FeedIn(BaseModel):
+    url: str
+    mode: str = "bulk"
+    incognito: bool = False
+    interval_min: int = 60
+    backfill: int = 3
+
+
+class FeedPatch(BaseModel):
+    enabled: bool | None = None
+    mode: str | None = None
+    incognito: bool | None = None
+    interval_min: int | None = None
+    title: str | None = None
+
+
+class RematchIn(BaseModel):
+    source_id: int | None = None
 
 
 def _safe_name(name: str) -> str:
@@ -68,6 +92,25 @@ def create_app(run_worker: bool = True) -> FastAPI:
 
     app = FastAPI(title="VoiceFlock", version=__version__, lifespan=lifespan)
     app.state.gcache = gallery.GalleryCache()
+
+    password = os.environ.get("VOICEFLOCK_PASSWORD", "")
+    if password:
+        @app.middleware("http")
+        async def basic_auth(request: Request, call_next):
+            """Optional HTTP basic auth (any username) when VOICEFLOCK_PASSWORD is set: handy when the
+            laptop is reachable over LAN/Tailscale."""
+            hdr = request.headers.get("authorization", "")
+            ok = False
+            if hdr.lower().startswith("basic "):
+                try:
+                    _, _, pw = base64.b64decode(hdr[6:]).decode("utf-8", "replace").partition(":")
+                    ok = secrets.compare_digest(pw, password)
+                except Exception:  # noqa: BLE001
+                    ok = False
+            if not ok:
+                return Response("VoiceFlock: password required", status_code=401,
+                                headers={"WWW-Authenticate": 'Basic realm="VoiceFlock"'})
+            return await call_next(request)
 
     # ---------------------------------------------------------------- helpers
     def source_out(conn, s: dict) -> dict:
@@ -174,6 +217,9 @@ def create_app(run_worker: bool = True) -> FastAPI:
                      (speaker_id,))
         delete_empty_provisional(conn, sp["person_id"])
 
+    def queue_rematch(conn, source_id: int | None = None) -> int:
+        return worker.enqueue(conn, source_id, "rematch", priority=-5, dedupe=True)
+
     def find_or_create_person(conn, name: str) -> int:
         name = name.strip()
         if not name:
@@ -259,8 +305,12 @@ def create_app(run_worker: bool = True) -> FastAPI:
 
     @app.post("/api/upload")
     async def upload(files: list[UploadFile] = File(...), mode: str = Form("bulk"), incognito: bool = Form(False),
-                     person_name: str | None = Form(None), conn=Depends(get_conn)):
+                     person_name: str | None = Form(None), force: bool = Form(False), conn=Depends(get_conn)):
         config.ensure_dirs()
+        if mode not in ("bulk", "match", "enroll"):
+            raise HTTPException(400, "mode must be bulk|match|enroll")
+        if mode == "enroll" and not (person_name or "").strip():
+            raise HTTPException(400, "enroll mode needs a person name")
         out = []
         for f in files:
             fname = _safe_name(f.filename or "upload")
@@ -278,11 +328,16 @@ def create_app(run_worker: bool = True) -> FastAPI:
                     if not chunk:
                         break
                     fh.write(chunk)
+            sha = audio.sha256_file(dest)
+            dup = db.row(conn, "SELECT id, name, status FROM sources WHERE sha256=? AND id!=? AND status!='failed'", (sha, sid))
+            if dup and not force:
+                dest.unlink(missing_ok=True)
+                conn.execute("DELETE FROM sources WHERE id=?", (sid,))
+                out.append({"name": fname, "duplicate_of": dup["id"], "duplicate_name": dup["name"]})
+                continue
             with db.tx(conn):
-                conn.execute("UPDATE sources SET orig_path=? WHERE id=?", (str(dest), sid))
+                conn.execute("UPDATE sources SET orig_path=?, sha256=? WHERE id=?", (str(dest), sha, sid))
                 if mode == "enroll":
-                    if not person_name:
-                        raise HTTPException(400, "enroll mode needs a person name")
                     pid = find_or_create_person(conn, person_name)
                     conn.execute("UPDATE sources SET enroll_person_id=?, incognito=0 WHERE id=?", (pid, sid))
                 jid = worker.enqueue(conn, sid)
@@ -294,6 +349,9 @@ def create_app(run_worker: bool = True) -> FastAPI:
     def upload_url(body: UrlIn, conn=Depends(get_conn)):
         if not re.match(r"^https?://", body.url.strip()):
             raise HTTPException(400, "url must start with http(s)://")
+        dup = db.row(conn, "SELECT id, name FROM sources WHERE url=? AND status!='failed'", (body.url.strip(),))
+        if dup:
+            return {"duplicate_of": dup["id"], "duplicate_name": dup["name"], "name": body.url.strip()}
         with db.tx(conn):
             res = _create_source(conn, body.url.strip(), None, body.url.strip(), None, body.mode, body.incognito,
                                  body.person_name)
@@ -301,10 +359,14 @@ def create_app(run_worker: bool = True) -> FastAPI:
 
     # ---------------------------------------------------------------- sources
     @app.get("/api/sources")
-    def list_sources(mode: str | None = None, status: str | None = None, limit: int = 100, offset: int = 0,
-                     conn=Depends(get_conn)):
+    def list_sources(mode: str | None = None, status: str | None = None, q: str | None = None, limit: int = 100,
+                     offset: int = 0, conn=Depends(get_conn)):
+        q_text = q
         q = "SELECT * FROM sources WHERE status!='deleted'"
         params: list[Any] = []
+        if q_text:
+            q += " AND (name LIKE ? OR url LIKE ? OR id IN (SELECT ss.source_id FROM source_speakers ss JOIN persons p ON p.id=ss.person_id WHERE p.name LIKE ?))"
+            params += [f"%{q_text}%", f"%{q_text}%", f"%{q_text}%"]
         if mode:
             q += " AND mode=?"; params.append(mode)
         if status:
@@ -484,6 +546,7 @@ def create_app(run_worker: bool = True) -> FastAPI:
                                  (body.name.strip(), pid))
                     conn.execute("UPDATE source_speakers SET assignment='named' WHERE person_id=? AND assignment='auto'", (pid,))
                     conn.execute("UPDATE matches SET status='confirmed' WHERE person_id=? AND status='auto'", (pid,))
+                    queue_rematch(conn)
             if body.notes is not None:
                 conn.execute("UPDATE persons SET notes=? WHERE id=?", (body.notes, pid))
             db.bump_prints_version(conn)
@@ -544,6 +607,7 @@ def create_app(run_worker: bool = True) -> FastAPI:
             else:
                 pid = find_or_create_person(conn, body.name or "")
             assign_speaker(conn, speaker_id, pid, "named", "named")
+            queue_rematch(conn)
         return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,)))
 
     @app.post("/api/speakers/{speaker_id}/unassign")
@@ -559,6 +623,7 @@ def create_app(run_worker: bool = True) -> FastAPI:
             raise HTTPException(404)
         with db.tx(conn):
             assign_speaker(conn, int(m["source_speaker_id"]), int(m["person_id"]), "confirm", "confirmed")
+            queue_rematch(conn)
         return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (m["source_speaker_id"],)))
 
     @app.post("/api/matches/{mid}/reject")
@@ -593,6 +658,104 @@ def create_app(run_worker: bool = True) -> FastAPI:
             r["heard_in"] = person_sources(conn, r["person_id"], limit=10)
         return {"known": known, "recurring_unknown": recurring,
                 "confirm_threshold": config.Settings(conn)["confirm_threshold"]}
+
+    # ---------------------------------------------------------------- maintenance jobs
+    @app.post("/api/rematch")
+    def api_rematch(body: RematchIn | None = None, conn=Depends(get_conn)):
+        """Re-score every processed recording against the current gallery (fast, no ML)."""
+        with db.tx(conn):
+            jid = queue_rematch(conn, body.source_id if body else None)
+        return {"job_id": jid}
+
+    @app.post("/api/selftest")
+    def api_selftest(conn=Depends(get_conn)):
+        with db.tx(conn):
+            jid = worker.enqueue(conn, None, "selftest", priority=10, dedupe=True)
+        return {"job_id": jid}
+
+    @app.get("/api/selftest")
+    def api_selftest_latest(conn=Depends(get_conn)):
+        j = db.row(conn, "SELECT * FROM jobs WHERE type='selftest' ORDER BY id DESC LIMIT 1")
+        if j and j.get("result"):
+            try:
+                j["result"] = json.loads(j["result"])
+            except ValueError:
+                pass
+        return {"job": j}
+
+    # ---------------------------------------------------------------- feeds
+    def feed_out(conn, f: dict) -> dict:
+        f = dict(f)
+        f["recent"] = db.rows(conn, "SELECT fi.*, s.status AS source_status FROM feed_items fi LEFT JOIN sources s ON s.id=fi.source_id"
+                                    " WHERE fi.feed_id=? ORDER BY fi.source_id IS NULL, fi.id DESC LIMIT 5", (f["id"],))
+        return f
+
+    @app.get("/api/feeds")
+    def list_feeds(conn=Depends(get_conn)):
+        return {"feeds": [feed_out(conn, f) for f in db.rows(conn, "SELECT * FROM feeds ORDER BY id DESC")]}
+
+    @app.post("/api/feeds")
+    def create_feed(body: FeedIn, conn=Depends(get_conn)):
+        if not re.match(r"^https?://", body.url.strip()):
+            raise HTTPException(400, "url must start with http(s)://")
+        if body.mode not in ("bulk", "match"):
+            raise HTTPException(400, "feed mode must be bulk or match")
+        if db.row(conn, "SELECT id FROM feeds WHERE url=?", (body.url.strip(),)):
+            raise HTTPException(409, "feed already added")
+        with db.tx(conn):
+            fid = feeds.add_feed(conn, body.url, body.mode, body.incognito, body.interval_min, body.backfill)
+        return feed_out(conn, db.row(conn, "SELECT * FROM feeds WHERE id=?", (fid,)))
+
+    @app.patch("/api/feeds/{fid}")
+    def patch_feed(fid: int, body: FeedPatch, conn=Depends(get_conn)):
+        f = db.row(conn, "SELECT * FROM feeds WHERE id=?", (fid,))
+        if not f:
+            raise HTTPException(404)
+        with db.tx(conn):
+            for k, v in body.model_dump(exclude_none=True).items():
+                conn.execute(f"UPDATE feeds SET {k}=? WHERE id=?", (int(v) if isinstance(v, bool) else v, fid))
+        return feed_out(conn, db.row(conn, "SELECT * FROM feeds WHERE id=?", (fid,)))
+
+    @app.delete("/api/feeds/{fid}")
+    def delete_feed(fid: int, conn=Depends(get_conn)):
+        with db.tx(conn):
+            n = conn.execute("DELETE FROM feeds WHERE id=?", (fid,)).rowcount
+        if not n:
+            raise HTTPException(404)
+        return {"deleted": fid}
+
+    @app.post("/api/feeds/{fid}/poll")
+    def poll_feed_now(fid: int, conn=Depends(get_conn)):
+        f = db.row(conn, "SELECT * FROM feeds WHERE id=?", (fid,))
+        if not f:
+            raise HTTPException(404)
+        r = feeds.poll_feed(conn, f)
+        if r["error"]:
+            raise HTTPException(502, f"feed fetch failed: {r['error']}")
+        return {"queued": r["new"], "feed": feed_out(conn, db.row(conn, "SELECT * FROM feeds WHERE id=?", (fid,)))}
+
+    # ---------------------------------------------------------------- export / import
+    @app.get("/api/export/gallery.json")
+    def export_gallery(include_unnamed: bool = True, conn=Depends(get_conn)):
+        data = transfer.export_gallery(conn, include_provisional=include_unnamed)
+        return Response(transfer.dumps(data), media_type="application/json",
+                        headers={"Content-Disposition": "attachment; filename=voiceflock-gallery.json"})
+
+    @app.get("/api/export/matches.csv")
+    def export_matches(conn=Depends(get_conn)):
+        return PlainTextResponse(transfer.matches_csv(conn), media_type="text/csv",
+                                 headers={"Content-Disposition": "attachment; filename=voiceflock-matches.csv"})
+
+    @app.post("/api/import/gallery")
+    async def import_gallery(file: UploadFile = File(...), conn=Depends(get_conn)):
+        try:
+            data = json.loads(await file.read())
+            stats = transfer.import_gallery(conn, data)
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(400, f"bad gallery file: {e}")
+        with db.tx(conn):
+            queue_rematch(conn)
+        return stats
 
     # ---------------------------------------------------------------- static
     config.ensure_dirs()

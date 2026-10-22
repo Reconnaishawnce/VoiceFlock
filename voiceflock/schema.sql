@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS sources (
   n_speakers INTEGER,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   processed_at TEXT,
-  meta TEXT
+  meta TEXT,
+  feed_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   log TEXT,
   error TEXT,
   worker TEXT,
+  result TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   started_at TEXT,
   finished_at TEXT,
@@ -138,4 +140,33 @@ CREATE TABLE IF NOT EXISTS calibrations (
   eer REAL,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- RSS/Atom feeds polled by the worker; new episodes are queued automatically.
+CREATE TABLE IF NOT EXISTS feeds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL UNIQUE,
+  title TEXT,
+  mode TEXT NOT NULL DEFAULT 'bulk',
+  incognito INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  interval_min INTEGER NOT NULL DEFAULT 60,
+  backfill INTEGER NOT NULL DEFAULT 3,      -- how many existing items to grab on first poll
+  last_checked_at TEXT,
+  last_error TEXT,
+  n_items INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS feed_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+  guid TEXT NOT NULL,
+  title TEXT,
+  url TEXT,
+  published TEXT,
+  source_id INTEGER,
+  skipped INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(feed_id, guid)
 );

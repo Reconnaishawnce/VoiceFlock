@@ -70,10 +70,9 @@ def prepare_source(conn: sqlite3.Connection, source: dict, progress: Progress) -
             progress("downloading", 0.0)
             out_dir = config.ORIG_DIR / f"url_{sid}"
             orig = audio.download_url(source["url"], out_dir)
-            conn.execute("UPDATE sources SET orig_path=?, original_filename=?, name=COALESCE(NULLIF(name,''), ?) WHERE id=?",
-                         (str(orig), orig.name, orig.stem, sid))
+            conn.execute("UPDATE sources SET orig_path=?, original_filename=? WHERE id=?", (str(orig), orig.name, sid))
             if not source["name"] or source["name"] == source["url"]:
-                conn.execute("UPDATE sources SET name=? WHERE id=?", (orig.stem, sid))
+                conn.execute("UPDATE sources SET name=? WHERE id=?", (orig.stem.replace("_", " "), sid))
         else:
             raise audio.AudioError("source file is missing")
     wav_path = config.AUDIO_DIR / f"{sid}.wav"
@@ -282,5 +281,8 @@ def process_source(conn: sqlite3.Connection, source_id: int, progress: Progress 
         }
         conn.execute("UPDATE sources SET status='done', n_speakers=?, processed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),"
                      " meta=? WHERE id=?", (len(results), json.dumps(summary), source_id))
+        if source["mode"] == "enroll":
+            from .worker import enqueue
+            enqueue(conn, None, "rematch", priority=-5, dedupe=True)  # earlier recordings may contain this person
     progress("done", 1.0)
     return summary

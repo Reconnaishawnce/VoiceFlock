@@ -25,6 +25,9 @@ class DiarizationError(RuntimeError):
     pass
 
 
+FALLBACKS = ("pyannote/speaker-diarization-community-1", "pyannote/speaker-diarization-3.1")
+
+
 def pick_device(pref: str = "auto") -> str:
     import torch
     pref = (pref or "auto").lower()
@@ -49,14 +52,29 @@ class Diarizer:
                 "No HuggingFace token set. Add it in Settings (or HF_TOKEN env) and accept the model terms at "
                 f"https://huggingface.co/{pipeline_name}")
         kw = {"cache_dir": str(cache_dir)} if cache_dir else {}
-        try:
-            pipe = Pipeline.from_pretrained(pipeline_name, token=token, **kw)
-        except TypeError:
-            pipe = Pipeline.from_pretrained(pipeline_name, use_auth_token=token, **kw)
+        pipe, errors = None, []
+        for name in dict.fromkeys([pipeline_name] + [f for f in FALLBACKS if f != pipeline_name]):
+            try:
+                try:
+                    pipe = Pipeline.from_pretrained(name, token=token, **kw)
+                except TypeError:
+                    pipe = Pipeline.from_pretrained(name, use_auth_token=token, **kw)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{name}: {type(e).__name__}: {str(e)[:300]}")
+                pipe = None
+                continue
+            if pipe is None:
+                errors.append(f"{name}: returned None (model terms not accepted?)")
+                continue
+            if name != pipeline_name:
+                log.warning("diarization pipeline %s unavailable, using %s", pipeline_name, name)
+            pipeline_name = name
+            break
         if pipe is None:
             raise DiarizationError(
-                f"Could not load {pipeline_name}. Accept the terms at https://huggingface.co/{pipeline_name} "
-                "(and https://huggingface.co/pyannote/segmentation-3.0) with the same account as your token.")
+                "Could not load a diarization pipeline. With the SAME HuggingFace account as your token, accept the terms at "
+                f"https://huggingface.co/{pipeline_name} and https://huggingface.co/pyannote/segmentation-3.0 "
+                f"(and https://huggingface.co/pyannote/speaker-diarization-3.1 for the fallback). Details: " + " | ".join(errors))
         self.device = pick_device(device)
         pipe.to(torch.device(self.device))
         self.pipe = pipe

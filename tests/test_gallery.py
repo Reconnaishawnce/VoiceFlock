@@ -1,6 +1,6 @@
 import numpy as np
 
-from voiceflock import config, db, gallery
+from voiceflock import config, gallery
 from tests.conftest import rand_unit, speaker_cluster
 
 

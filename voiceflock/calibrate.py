@@ -40,7 +40,6 @@ def run(folder: Path, add_cohort: bool = True, replace_cohort: bool = False) -> 
     cohort = gallery.build_cohort(conn, settings)
     # When scoring a clip, its own speaker's cohort mean would leak into z-norm, so give those entries
     # the speaker's index as person_id and let stats() exclude them.
-    labels = np.array([("calib:" + c.speaker) for c in clips])
     coh_labels = [r["label"] for r in conn.execute("SELECT label FROM cohort")]
     spk_idx = {s: i for i, s in enumerate(speakers)}
     pid = np.full(len(cohort), -1, dtype=np.int64)
