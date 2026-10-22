@@ -64,6 +64,20 @@
         <label class="chk"><input type="checkbox" id="inc-bulk"> Incognito: match only, don't save any voices from these files</label>
         <div id="upl-bulk" class="uploads"></div>
       </div>
+      <div class="card col">
+        <h2>Import a YouTube channel or playlist</h2>
+        <p class="muted">Lists the videos without downloading. Filter, tick what you want, queue. Downloads run one at a time behind your own uploads.</p>
+        <div class="urlrow"><input id="yt-url" placeholder="https://www.youtube.com/@CityOfExample  ·  playlist URL  ·  channel/videos URL"><button id="btn-yt-list" class="primary">List videos</button></div>
+        <div class="inline" style="flex-wrap:wrap">
+          <input id="yt-filter" placeholder="title filter (regex), e.g. council|hearing" style="flex:2 1 200px">
+          <input id="yt-min" type="number" placeholder="min min" title="minimum minutes" style="flex:0 0 90px">
+          <input id="yt-max" type="number" placeholder="max min" title="maximum minutes" style="flex:0 0 90px">
+          <input id="yt-from" type="date" title="from date (when the listing has dates)" style="flex:0 0 150px">
+          <input id="yt-limit" type="number" value="300" title="how many entries to fetch from the channel" style="flex:0 0 90px">
+        </div>
+        <label class="chk"><input type="checkbox" id="yt-prefix" checked> Prefix recording names with the channel title</label>
+        <div id="yt-results"></div>
+      </div>
       <div class="card col narrow">
         <h2>Watched feeds <span class="muted" id="feeds-count"></span></h2>
         <p class="muted">Podcast RSS or a YouTube channel feed. New episodes are downloaded and scanned automatically.</p>
@@ -181,6 +195,10 @@
       <p class="muted">Loads both models and runs them on 8 s of synthetic audio. Run this once after setting the token; the first run downloads the models.</p>
       <div class="actions"><button id="btn-selftest">Run self-test</button> <span id="selftest-status" class="muted"></span></div>
       <pre id="selftest-result" class="muted"></pre>
+      <h3>Phone app</h3>
+      <p class="muted">The Android app listens offline and alerts when a <b>flagged</b> voice (🔔 on a person) is heard. Build it from the <code>android/</code> folder or download the APK from the repository's Actions tab, install it, then in the app's Settings enter this address and press Sync:</p>
+      <pre id="phone-info" class="muted"></pre>
+      <div class="actions"><button id="btn-export-model">Prepare phone model now</button> <span id="model-status" class="muted"></span></div>
       <h3>Backup &amp; transfer</h3>
       <p class="muted">The whole app lives in the <code>data</code> folder. For moving voices between machines: <a class="link" href="/api/export/gallery.json">export gallery JSON</a>
         or import one: <label class="link">choose file<input type="file" id="import-gallery" accept="application/json" hidden></label> <span id="import-msg" class="muted"></span></p>

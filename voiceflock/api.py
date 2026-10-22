@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, audio, config, db, feeds, gallery, live, transfer, worker
+from . import __version__, audio, config, db, feeds, gallery, live, onnx_export, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -37,6 +37,24 @@ class PersonIn(BaseModel):
 class PersonPatch(BaseModel):
     name: str | None = None
     notes: str | None = None
+    alert: bool | None = None
+
+
+class YtListIn(BaseModel):
+    url: str
+    limit: int = 300
+    title_regex: str | None = None
+    min_minutes: float | None = None
+    max_minutes: float | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+class YtImportIn(BaseModel):
+    videos: list[dict]
+    mode: str = "bulk"
+    incognito: bool = False
+    prefix: str | None = None
 
 class MergeIn(BaseModel):
     into_id: int
@@ -283,6 +301,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         info["hf_token_set"] = bool(config.Settings(conn)["hf_token"])
         info["gpu"] = gpu_info()
         info["workers"] = workers if run_worker else 0
+        info["password_required"] = bool(password)
         info["queue"] = db.row(conn, "SELECT SUM(status='queued') AS queued, SUM(status='running') AS running,"
                                      " SUM(status='failed') AS failed, SUM(status='done') AS done FROM jobs")
         return info
@@ -606,6 +625,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                     queue_rematch(conn)
             if body.notes is not None:
                 conn.execute("UPDATE persons SET notes=? WHERE id=?", (body.notes, pid))
+            if body.alert is not None:
+                conn.execute("UPDATE persons SET alert=? WHERE id=?", (int(body.alert), pid))
             db.bump_prints_version(conn)
         return person_out(conn, db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,)))
 
@@ -860,6 +881,61 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         with db.tx(conn):
             queue_rematch(conn)
         return stats
+
+    # ---------------------------------------------------------------- youtube bulk import
+    @app.post("/api/youtube/list")
+    def yt_list(body: YtListIn, conn=Depends(get_conn)):
+        try:
+            title, videos = youtube.list_videos(body.url, limit=body.limit)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"could not list videos: {str(e)[:300]}")
+        videos = youtube.filter_videos(videos, body.title_regex, body.min_minutes, body.max_minutes, body.date_from, body.date_to)
+        youtube.mark_imported(conn, videos)
+        return {"title": title, "videos": youtube.video_dicts(videos),
+                "total_minutes": round(sum((v.duration_s or 0) for v in videos) / 60.0)}
+
+    @app.post("/api/youtube/import")
+    def yt_import(body: YtImportIn, conn=Depends(get_conn)):
+        vids = [youtube.Video(v.get("id", ""), v["url"], v.get("title") or v["url"], v.get("duration_s"), v.get("date"), v.get("view_count"))
+                for v in body.videos if v.get("url")]
+        return youtube.import_videos(conn, vids, body.mode, body.incognito, body.prefix)
+
+    # ---------------------------------------------------------------- phone sync
+    @app.get("/api/mobile/gallery.json")
+    def mobile_gallery(max_prints: int = 4, conn=Depends(get_conn)):
+        """Compact gallery for the phone: per person the mean print plus a few chunk prints, alert flags,
+        raw-cosine calibration and the match threshold."""
+        import base64
+        settings = config.Settings(conn)
+        cal = gallery.load_calibrations(conn, settings)["raw"]
+        people = []
+        for p in db.rows(conn, "SELECT id, name, kind, alert FROM persons"):
+            rows = conn.execute("SELECT embedding FROM prints WHERE person_id=? ORDER BY is_mean DESC, COALESCE(quality,0) DESC LIMIT ?",
+                                (p["id"], max_prints)).fetchall()
+            if not rows:
+                continue
+            prints = [base64.b64encode(db.emb_to_blob(gallery.l2n(db.blob_to_emb(r["embedding"])))).decode() for r in rows]
+            people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]), "prints": prints})
+        return {"format": "voiceflock-mobile", "version": 1, "generated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+                "dim": config.EMBED_DIM, "sample_rate": 16000, "match_threshold": float(settings["match_threshold"]),
+                "calibration": {"a": cal.a, "b": cal.b}, "window_s": float(settings["live_window_s"]), "hop_s": float(settings["live_hop_s"]),
+                "min_level_db": float(settings["live_min_level_db"]), "model": onnx_export.MODEL_FILE, "model_meta": onnx_export.meta(),
+                "people": people}
+
+    @app.get("/api/mobile/model.onnx")
+    def mobile_model(conn=Depends(get_conn)):
+        p = onnx_export.model_path()
+        if not p.exists():
+            with db.tx(conn):
+                jid = worker.enqueue(conn, None, "export_model", priority=5, dedupe=True)
+            return JSONResponse({"detail": "model export queued; try again in a minute", "job_id": jid}, status_code=202)
+        return FileResponse(str(p), media_type="application/octet-stream", filename=onnx_export.MODEL_FILE)
+
+    @app.post("/api/mobile/export_model")
+    def mobile_export_model(conn=Depends(get_conn)):
+        with db.tx(conn):
+            jid = worker.enqueue(conn, None, "export_model", priority=5, dedupe=True)
+        return {"job_id": jid, "meta": onnx_export.meta()}
 
     # ---------------------------------------------------------------- overview (charts)
     @app.get("/api/overview")

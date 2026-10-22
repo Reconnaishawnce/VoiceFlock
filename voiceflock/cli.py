@@ -219,6 +219,26 @@ def cmd_import(a):
     print(json.dumps(stats))
 
 
+def cmd_youtube(a):
+    from . import youtube
+    db.init_db()
+    conn = db.connect()
+    title, vids = youtube.list_videos(a.url, limit=a.limit)
+    vids = youtube.filter_videos(vids, a.filter, a.min_minutes, a.max_minutes, a.date_from, a.date_to, a.max)
+    youtube.mark_imported(conn, vids)
+    print(f"{title or a.url}: {len(vids)} videos match")
+    for v in vids:
+        print(f"  {'(have) ' if v.already_imported else ''}{(v.date or '')[:10]:<10} {(v.duration_s or 0)/60:6.0f} min  {v.title[:90]}")
+    if a.queue:
+        r = youtube.import_videos(conn, vids, a.mode, a.incognito, prefix=title if a.prefix else None)
+        print(f"queued {len(r['created'])}, skipped {r['skipped']} already in the library")
+
+
+def cmd_export_model(a):
+    from .onnx_export import export
+    print(json.dumps(export(out_dir=Path(a.out) if a.out else None), indent=2))
+
+
 def cmd_persons(a):
     db.init_db()
     conn = db.connect()
@@ -317,6 +337,25 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("import", help="import a gallery JSON export (merges people by name)")
     s.add_argument("file")
     s.set_defaults(fn=cmd_import)
+
+    s = sub.add_parser("youtube", help="list a channel/playlist, filter, and queue the videos")
+    s.add_argument("url")
+    s.add_argument("--filter", help="title regex, e.g. 'council|hearing'")
+    s.add_argument("--min-minutes", type=float)
+    s.add_argument("--max-minutes", type=float)
+    s.add_argument("--date-from", help="YYYY-MM-DD (when the listing has dates)")
+    s.add_argument("--date-to")
+    s.add_argument("--max", type=int, help="keep only the newest N matches")
+    s.add_argument("--limit", type=int, default=300, help="how many entries to list from the channel")
+    s.add_argument("--mode", choices=["bulk", "match"], default="bulk")
+    s.add_argument("--incognito", action="store_true")
+    s.add_argument("--prefix", action="store_true", help="prefix recording names with the channel title")
+    s.add_argument("--queue", action="store_true", help="actually queue them (default: just list)")
+    s.set_defaults(fn=cmd_youtube)
+
+    s = sub.add_parser("export-model", help="export the speaker encoder to ONNX for the phone app")
+    s.add_argument("--out")
+    s.set_defaults(fn=cmd_export_model)
 
     s = sub.add_parser("persons", help="list people / unknown voices")
     s.set_defaults(fn=cmd_persons)

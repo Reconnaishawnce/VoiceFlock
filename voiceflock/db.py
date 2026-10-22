@@ -47,6 +47,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sources ADD COLUMN feed_id INTEGER")
     if "result" not in _columns(conn, "jobs"):
         conn.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
+    if "alert" not in _columns(conn, "persons"):
+        conn.execute("ALTER TABLE persons ADD COLUMN alert INTEGER NOT NULL DEFAULT 0")
 
 
 @contextmanager

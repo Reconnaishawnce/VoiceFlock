@@ -10,3 +10,10 @@ data/
 .env
 eval_out/
 .DS_Store
+# android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml

@@ -266,8 +266,8 @@ def build_cohort(conn: sqlite3.Connection, settings: config.Settings) -> Cohort:
 
 def load_gallery(conn: sqlite3.Connection, settings: config.Settings | None = None) -> Gallery:
     settings = settings or config.Settings(conn)
-    persons = {int(r["id"]): {"name": r["name"], "kind": r["kind"]}
-               for r in conn.execute("SELECT id, name, kind FROM persons")}
+    persons = {int(r["id"]): {"name": r["name"], "kind": r["kind"], "alert": bool(r["alert"])}
+               for r in conn.execute("SELECT id, name, kind, alert FROM persons")}
     rows = conn.execute("SELECT id, person_id, source_id, embedding FROM prints").fetchall()
     if rows:
         emb = l2n(np.stack([db.blob_to_emb(r["embedding"]) for r in rows]))

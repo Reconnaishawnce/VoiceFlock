@@ -12,3 +12,6 @@ speechbrain>=1.0
 huggingface_hub>=0.23
 yt-dlp>=2024.4.9
 matplotlib>=3.8
+onnx>=1.16
+onnxscript>=0.3
+onnxruntime>=1.18

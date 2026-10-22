@@ -153,6 +153,13 @@ voiceflock persons                                # list people / unnamed voices
 voiceflock settings [--set match_threshold=0.8 hf_token=hf_...]
 ```
 
+### YouTube channels and playlists
+
+Bulk Scan → **Import a YouTube channel or playlist**: paste `https://www.youtube.com/@SomeCity`, a playlist, or a
+`/videos` URL. The videos are listed without downloading (title, length, date when YouTube exposes it); filter
+by title regex, length and date, untick what you don't want, **Queue selected**. Videos already in the library
+are marked. Same from the CLI: `voiceflock youtube URL --filter "council|hearing" --min-minutes 20 --queue`.
+
 ### Feeds
 
 Podcast RSS (`<enclosure>`), Media RSS and Atom are supported. For a YouTube channel use
@@ -200,21 +207,38 @@ voiceflock/
   audio.py      ffmpeg / yt-dlp / SNR        calibrate.py evaluate.py metrics.py labeled.py
   rematch.py    retroactive re-scoring       feeds.py     RSS/Atom watcher (polled by the worker)
   selftest.py   model smoke test             transfer.py  gallery export/import, matches CSV
+  live.py       live-mode matcher            youtube.py   channel/playlist listing + import
+  onnx_export.py speaker encoder -> ONNX     android/     the phone app (Kotlin, ONNX Runtime)
   config.py     settings (DB + env)          schema.sql   static/ (UI)
 tests/          pytest: unit tests need no models; `-m slow` runs the end-to-end test with the real ECAPA model
 ```
 
-## Always-on listening (the Android question)
+## Phone app (Android, offline)
 
-Live mode in the web UI is the proof of concept: a 3 s window is embedded every second and matched against
-the library. On the laptop CPU that costs well under 10% of one core. The same maths runs on a phone:
-ECAPA-TDNN is a 20 MB model that runs faster than realtime on a mid-range Android CPU through ONNX
-Runtime or TFLite, the gallery (even 900 people × a dozen prints) is a few megabytes, and a voice-activity
-detector keeps the model idle during silence. An on-device app is therefore feasible, offline, with a
-foreground service and roughly 5-10% battery per hour of active listening. The alternative, streaming the
-mic to the laptop over Tailscale, reuses this exact server code (`/ws/live`) and is a week of work less,
-at the cost of needing connectivity. Either way, check the recording-consent law where you are before
-listening to people continuously.
+`android/` is a small Kotlin app that listens passively and alerts (sound, vibration, notification) when a
+**flagged** voice is heard. Everything runs on the phone: the same ECAPA speaker encoder, exported to ONNX
+by the laptop with feature extraction inside the graph (`voiceflock export-model`; verified to reproduce
+the laptop's embeddings to cosine 1.000), plus a compact copy of the library. After one sync it needs no
+network, and audio is never stored or sent anywhere.
+
+1. **Flag voices** on the laptop: the 🔔 next to any person (people list, person page, unnamed-voice cards).
+   Flagged voices also light up in the laptop's Live tab.
+2. **Get the APK**: GitHub → Actions → *android-apk* → download `VoiceFlock-debug-apk` (built on every push
+   that touches `android/`), or open `android/` in Android Studio and run it. Allow "install unknown apps"
+   for your browser/file manager when sideloading.
+3. **Sync**: in the app's Settings enter the laptop address (LAN IP or Tailscale name, with `:8787`) and the
+   password if you set one, press **Sync voices + model**. The first sync makes the laptop export the model
+   (about a minute) and downloads ≈85 MB once; later syncs are a few hundred KB.
+4. **Listen**: Start listening. A foreground notification shows it's running; alerts arrive even with the
+   screen off. The Voices tab lets you flag/unflag on the phone (overrides the laptop's flags) or alert on
+   every known voice. Re-sync whenever the library changes.
+
+How it works: a 3 s window is embedded every second (≈100 ms of CPU on a mid-range phone, nothing during
+silence), scored against every print with cosine similarity, calibrated with the laptop's calibration,
+smoothed over consecutive speech windows, and alerted when a flagged person is above the match threshold
+(cooldown 30 s per person). Expect roughly 5-10% battery per hour of active listening.
+
+Check the recording-consent law where you are before listening to people continuously.
 
 ## Updating
 

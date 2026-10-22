@@ -83,3 +83,7 @@ code { background:var(--panel2); padding:1px 5px; border-radius:4px; }
 .livenow .meter { height:10px; background:var(--panel); border-radius:5px; overflow:hidden; } .livenow .meter i { display:block; height:100%; background:var(--acc); transition:width .3s; }
 .livenow .others { color:var(--muted); font-size:13px; }
 .vcard .inline { flex-wrap:wrap; } .vcard .inline select { flex:1 1 140px; min-width:0; }
+
+.bell { cursor:pointer; opacity:.35; font-size:15px; margin-left:4px; } .bell.on { opacity:1; }
+.ytrow { display:grid; grid-template-columns:24px 1fr 70px 90px; gap:8px; align-items:center; padding:4px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.ytrow .muted { font-size:12px; }

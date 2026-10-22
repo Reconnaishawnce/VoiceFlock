@@ -85,6 +85,10 @@ def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
             from .rematch import rematch
             ids = [int(job["source_id"])] if job["source_id"] is not None else None
             result = rematch(conn, ids, gcache, progress)
+        elif job["type"] == "export_model":
+            from .onnx_export import export
+            progress("exporting ECAPA to ONNX", 0.1)
+            result = export()
         elif job["type"] == "selftest":
             from .selftest import run as selftest
             result = selftest(conn, progress)

@@ -85,9 +85,9 @@ class LiveMatcher:
             c = names.get(pid)
             info = g.persons.get(pid, {"name": f"#{pid}", "kind": "named"})
             nxt = ranked[i + 1][1] if i + 1 < len(ranked) else 0.0
-            out.append({"person_id": pid, "name": info["name"], "kind": info["kind"], "probability": round(p, 4),
-                        "instant": round(c.probability, 4) if c else 0.0, "margin": round(p - nxt, 4)})
-        alert = bool(out) and out[0]["kind"] == "named" and out[0]["probability"] >= self.match_threshold
+            out.append({"person_id": pid, "name": info["name"], "kind": info["kind"], "flagged": bool(info.get("alert")),
+                        "probability": round(p, 4), "instant": round(c.probability, 4) if c else 0.0, "margin": round(p - nxt, 4)})
+        alert = bool(out) and (out[0]["kind"] == "named" or out[0]["flagged"]) and out[0]["probability"] >= self.match_threshold
         return LiveFrame(t, level, True, out, alert)
 
 

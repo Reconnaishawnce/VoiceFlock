@@ -262,6 +262,10 @@ async function loadAlerts() {
   } catch (e) { onErr(e); }
 }
 
+/* ---------------- alert flags ---------------- */
+const bell = (p) => `<span class="bell ${p.alert ? "on" : ""}" title="${p.alert ? "Alerting on this voice (Live + phone). Click to stop." : "Alert me when this voice is heard (Live + phone)"}" onclick="toggleAlert(${p.id}, ${p.alert ? "false" : "true"}, event)">🔔</span>`;
+async function toggleAlert(id, on, ev) { ev?.stopPropagation(); try { await api(`/api/persons/${id}`, { method: "PATCH", body: { alert: on } }); toast(on ? "Will alert on this voice" : "Alert off"); refreshTab(); loadNames(); } catch (e) { onErr(e); } }
+
 /* ---------------- glyphs & overview ---------------- */
 function glyphSvg(g, color = "var(--s1)", size = 28) {
   if (!g) return `<span class="glyph"></span>`;
@@ -355,7 +359,7 @@ function renderLive(m) {
   if (!top) { now.innerHTML = `<div class="who muted">speech, empty gallery</div>`; return; }
   const known = top.kind === "named";
   now.className = "livenow" + (m.alert ? " alert" : "");
-  now.innerHTML = `<div class="muted">${m.alert ? "KNOWN VOICE" : top.probability >= thr ? "unnamed voice from the library" : "no confident match"}</div>
+  now.innerHTML = `<div class="muted">${m.alert && top.flagged ? "🔔 FLAGGED VOICE" : m.alert ? "KNOWN VOICE" : top.probability >= thr ? "unnamed voice from the library" : "no confident match"}</div>
     <div class="who" style="${m.alert ? "" : "opacity:.7"}">${esc(top.name)} <span class="prob ${probCls(top.probability, thr, SETTINGS.confirm_threshold || 0.9)}" style="font-size:18px">${pct(top.probability)}</span></div>
     <div class="meter"><i style="width:${pct(top.probability)}"></i></div>
     <div class="others">${m.candidates.slice(1).map((c) => `${esc(c.name)} ${pct(c.probability)}`).join(" · ") || ""}</div>`;
@@ -366,6 +370,34 @@ function renderLive(m) {
     LIVE.log.unshift(`${new Date().toLocaleTimeString()} — ${top.name} ${pct(top.probability)}${known ? "" : " (unnamed)"}`);
     $("#live-log").innerHTML = LIVE.log.slice(0, 50).map((l) => `<div class="item">${esc(l)}</div>`).join("");
   }
+}
+
+/* ---------------- youtube channel import ---------------- */
+let YT = { title: null, videos: [] };
+$("#btn-yt-list").onclick = async () => {
+  const url = $("#yt-url").value.trim(); if (!url) return;
+  const out = $("#yt-results"); out.innerHTML = '<p class="muted">Listing… (a big channel takes 10-30 s)</p>';
+  try {
+    const body = { url, limit: Number($("#yt-limit").value || 300), title_regex: $("#yt-filter").value.trim() || null,
+      min_minutes: $("#yt-min").value ? Number($("#yt-min").value) : null, max_minutes: $("#yt-max").value ? Number($("#yt-max").value) : null,
+      date_from: $("#yt-from").value || null };
+    const j = await api("/api/youtube/list", { method: "POST", body }); YT = j;
+    const fresh = j.videos.filter((v) => !v.already_imported);
+    out.innerHTML = `<div class="hdr"><b>${esc(j.title || url)}</b> <span class="muted">${j.videos.length} videos match · ${fmtT(j.total_minutes * 60)} total · ${fresh.length} not yet in the library</span>
+      <div class="actions"><button class="small" onclick="ytAll(true)">select all new</button><button class="small" onclick="ytAll(false)">none</button><button class="small primary" onclick="ytImport()">Queue selected</button></div></div>
+      <div style="max-height:360px;overflow:auto">${j.videos.map((v, i) => `<div class="ytrow"><input type="checkbox" data-i="${i}" ${v.already_imported ? "disabled" : "checked"}>
+        <div>${esc(v.title)}${v.already_imported ? ` <a class="link" onclick="openSource(${v.already_imported})">(in library)</a>` : ""}</div>
+        <div class="muted">${v.duration_s ? fmtT(v.duration_s) : ""}</div><div class="muted">${esc(v.date || "")}</div></div>`).join("")}</div>`;
+  } catch (e) { out.innerHTML = ""; onErr(e); }
+};
+function ytAll(on) { $$("#yt-results input[type=checkbox]:not(:disabled)").forEach((c) => (c.checked = on)); }
+async function ytImport() {
+  const sel = $$("#yt-results input[type=checkbox]:checked").map((c) => YT.videos[Number(c.dataset.i)]);
+  if (!sel.length) return toast("Nothing selected", true);
+  try {
+    const r = await api("/api/youtube/import", { method: "POST", body: { videos: sel, mode: "bulk", incognito: $("#inc-bulk").checked, prefix: $("#yt-prefix").checked ? YT.title : null } });
+    toast(`Queued ${r.created.length} video(s)${r.skipped ? `, ${r.skipped} already in the library` : ""}`); loadStats(); $("#btn-yt-list").click();
+  } catch (e) { onErr(e); }
 }
 
 /* ---------------- feeds ---------------- */
@@ -400,7 +432,7 @@ async function loadBuild() {
     $("#unnamed-count").textContent = `(${u.voices.length})`;
     const mergeOpts = (self) => `<option value="">Merge into…</option>` + u.voices.filter((v) => v.id !== self).map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("") + named.map((p) => `<option value="${p.id}">${esc(p.name)} (known)</option>`).join("");
     $("#unnamed").innerHTML = u.voices.length ? `<div class="grid">` + u.voices.map((v) => `<div class="vcard">
-      <div class="nm">${esc(v.name)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
+      <div class="nm">${esc(v.name)}${bell(v)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
       ${v.heard_in.slice(0, 3).map((h) => `<div class="sub"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}</div>${h.clip_url ? `<audio controls preload="none" src="${h.clip_url}"></audio>` : ""}`).join("")}
       <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
       <div class="inline"><button class="small" onclick="acceptPerson(${v.id})" title="Track this voice as a known voice without naming it">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div>
@@ -424,7 +456,7 @@ async function loadMergeSuggestions() {
 async function mergeInto(fromId, intoId) { try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); loadBuild(); loadStats(); } catch (e) { onErr(e); } }
 function renderPeople(list) {
   const q = ($("#person-search").value || "").toLowerCase();
-  $("#people").innerHTML = list.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item" style="display:flex;gap:8px;align-items:center">${glyphSvg(p.glyph)}<div><a class="link" onclick="openPerson(${p.id})">${esc(p.name)}</a>
+  $("#people").innerHTML = list.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item" style="display:flex;gap:8px;align-items:center">${glyphSvg(p.glyph)}<div><a class="link" onclick="openPerson(${p.id})">${esc(p.name)}</a>${bell(p)}
     <div class="muted" style="font-size:12px">${p.n_prints} prints · ${p.n_sources} rec · ${fmtT(p.speech_seconds)}</div></div></div>`).join("") || `<p class="muted">No people yet.</p>`;
 }
 $("#person-search").addEventListener("input", () => loadNames().then(renderPeople));
@@ -432,7 +464,7 @@ async function loadPersonDetail(id) {
   try {
     const p = await api(`/api/persons/${id}`);
     const el = $("#person-detail"); el.classList.remove("hidden");
-    el.innerHTML = `<div class="hdr"><h2 style="display:flex;align-items:center;gap:10px">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 36)} ${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span></h2>
+    el.innerHTML = `<div class="hdr"><h2 style="display:flex;align-items:center;gap:10px">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 36)} ${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span>${bell(p)}</h2>
       <div class="actions"><button class="small" onclick="renamePerson(${p.id})">Rename</button><button class="small danger" onclick="deletePerson(${p.id})">Delete</button><button class="small" onclick="STATE.personDetail=null;loadBuild()">Close</button></div></div>
       <div class="sub">${p.n_prints} prints from ${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech ${p.notes ? "· " + esc(p.notes) : ""}</div>
       <h3>Heard in</h3>${p.heard_in.map((h) => `<div class="item"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)} <span class="pill">${esc(h.assignment)}</span>
@@ -512,10 +544,23 @@ async function loadSettings() {
       const input = s.type === "bool" ? `<input type="checkbox" name="${k}" ${v ? "checked" : ""}>` : s.type === "secret" ? `<input type="password" name="${k}" value="${esc(v)}" autocomplete="off">` : s.type === "float" ? `<input type="number" step="0.01" name="${k}" value="${v}">` : s.type === "int" ? `<input type="number" step="1" name="${k}" value="${v}">` : `<input name="${k}" value="${esc(v)}">`;
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
     renderSelftest();
+    renderPhone();
     const st = await api("/api/stats");
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort size ${st.cohort_size}, min ${SETTINGS.cohort_min_size})\ncalibration: ${st.calibrated ? "fitted by `voiceflock calibrate`" : "defaults"}  raw a=${st.calibration.raw.a.toFixed(3)} b=${st.calibration.raw.b.toFixed(3)}  snorm a=${st.calibration.snorm.a.toFixed(3)} b=${st.calibration.snorm.b.toFixed(3)}`;
   } catch (e) { onErr(e); }
 }
+async function renderPhone() {
+  try {
+    const h = await api("/api/health");
+    const url = location.origin;
+    $("#phone-info").textContent = `Address to enter in the app:  ${url}\n(from your phone use the laptop's LAN IP or Tailscale name instead of localhost)\nPassword: ${h.password_required ? "the one in .env" : "none set"}`;
+    const r = await fetch("/api/mobile/model.onnx", { method: "HEAD" });
+    const ms = $("#model-status");
+    if (r.status === 200) { const mb = Math.round((Number(r.headers.get("content-length")) || 0) / 1048576); ms.textContent = `phone model ready (${mb} MB)`; }
+    else ms.textContent = "phone model not exported yet (the app's first sync triggers it, or press the button)";
+  } catch (e) {}
+}
+$("#btn-export-model").onclick = async () => { try { await api("/api/mobile/export_model", { method: "POST" }); toast("Model export queued (about a minute)"); } catch (e) { onErr(e); } };
 async function renderSelftest() {
   const { job } = await api("/api/selftest").catch(() => ({ job: null }));
   const st = $("#selftest-status"), out = $("#selftest-result");
