@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceFlock</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪶</text></svg>">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">🪶</span> VoiceFlock <span class="ver" id="ver"></span></div>
+  <nav id="tabs">
+    <button data-tab="bulk">Bulk Scan</button>
+    <button data-tab="build">Build Database</button>
+    <button data-tab="match">VoiceFlock Match</button>
+    <button data-tab="sources">Sources &amp; Queue</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div class="stats" id="stats"></div>
+</header>
+<div id="banner" class="banner hidden"></div>
+
+<main>
+  <!-- ======================= BULK ======================= -->
+  <section id="tab-bulk" class="tab">
+    <div class="row">
+      <div class="card col">
+        <h2>Bulk scan</h2>
+        <p class="muted">Drop many files (or paste URLs). Every speaker gets voiceprinted. Known voices raise an alert;
+          new voices are saved as unnamed voices so future recordings can match them.</p>
+        <div class="dropzone" id="drop-bulk">Drop audio/video files here or <label class="link">browse<input type="file" multiple hidden id="file-bulk"></label></div>
+        <div class="urlrow"><input id="url-bulk" placeholder="https://… (YouTube, podcast episode, direct link)"><button id="btn-url-bulk">Queue URL</button></div>
+        <label class="chk"><input type="checkbox" id="inc-bulk"> Incognito: match only, don't save any voices from these files</label>
+        <div id="upl-bulk" class="uploads"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="card col">
+        <h2>Alerts: known voices spotted</h2>
+        <p class="muted" id="alert-hint"></p>
+        <div id="alerts-known"></div>
+      </div>
+      <div class="card col">
+        <h2>Unnamed voices that keep showing up</h2>
+        <div id="alerts-recurring"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= BUILD ======================= -->
+  <section id="tab-build" class="tab hidden">
+    <div class="row">
+      <div class="card col narrow">
+        <h2>Enroll a known voice</h2>
+        <p class="muted">Upload clip(s) of someone you already know. The speaker with the most speech in each file is enrolled under this name; other speakers go through the normal flow.</p>
+        <input id="enroll-name" placeholder="Person name" list="person-names">
+        <datalist id="person-names"></datalist>
+        <div class="dropzone small" id="drop-enroll">Drop clip(s) or <label class="link">browse<input type="file" multiple hidden id="file-enroll"></label></div>
+        <div class="urlrow"><input id="url-enroll" placeholder="or a URL"><button id="btn-url-enroll">Queue</button></div>
+        <div id="upl-enroll" class="uploads"></div>
+        <h2>People</h2>
+        <input id="person-search" placeholder="search…">
+        <div id="people"></div>
+      </div>
+      <div class="card col">
+        <h2>Unnamed voices <span class="muted" id="unnamed-count"></span></h2>
+        <p class="muted">Listen, then name the voice. Typing an existing name merges into that person. Use <b>Merge</b> when two unnamed voices are the same person.</p>
+        <div id="unnamed"></div>
+      </div>
+    </div>
+    <div id="person-detail" class="card hidden"></div>
+  </section>
+
+  <!-- ======================= MATCH ======================= -->
+  <section id="tab-match" class="tab hidden">
+    <div class="row">
+      <div class="card col narrow">
+        <h2>VoiceFlock Match</h2>
+        <p class="muted">Upload a recording and see who it sounds like: top candidates with calibrated probability, margin over #2 and clip quality.</p>
+        <div class="dropzone" id="drop-match">Drop a file or <label class="link">browse<input type="file" multiple hidden id="file-match"></label></div>
+        <div class="urlrow"><input id="url-match" placeholder="or a URL"><button id="btn-url-match">Queue</button></div>
+        <label class="chk"><input type="checkbox" id="inc-match"> Incognito (don't save voices from this file)</label>
+        <div id="upl-match" class="uploads"></div>
+        <h3>Recent</h3>
+        <div id="match-recent"></div>
+      </div>
+      <div class="card col" id="match-result"><p class="muted">Results appear here.</p></div>
+    </div>
+  </section>
+
+  <!-- ======================= SOURCES ======================= -->
+  <section id="tab-sources" class="tab hidden">
+    <div class="row">
+      <div class="card col narrow">
+        <h2>Queue</h2>
+        <div id="jobs"></div>
+      </div>
+      <div class="card col">
+        <h2>Sources</h2>
+        <div id="sources"></div>
+      </div>
+    </div>
+    <div id="source-detail" class="card hidden"></div>
+  </section>
+
+  <!-- ======================= SETTINGS ======================= -->
+  <section id="tab-settings" class="tab hidden">
+    <div class="card">
+      <h2>Settings</h2>
+      <form id="settings-form"></form>
+      <div class="actions"><button id="btn-save-settings" class="primary">Save</button> <span id="settings-msg" class="muted"></span></div>
+      <h3>Calibration &amp; evaluation</h3>
+      <p class="muted">Run from the command line (see README): <code>voiceflock calibrate &lt;folder&gt;</code> fits the probability calibration and
+        cohort from labelled clips; <code>voiceflock evaluate &lt;folder&gt;</code> reports rank-1 accuracy, EER, DET curve and miss rate at 1% false alarm.</p>
+      <pre id="calib-info" class="muted"></pre>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

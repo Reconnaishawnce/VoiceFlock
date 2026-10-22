@@ -1,0 +1,15 @@
+# docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+services:
+  voiceflock:
+    build:
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cu121
+    environment:
+      - VOICEFLOCK_DEVICE=cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

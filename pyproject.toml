@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voiceflock"
+version = "0.1.0"
+description = "Open-set speaker identification: diarize audio, voiceprint every speaker, match against a gallery."
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "python-multipart>=0.0.9",
+  "numpy>=1.26",
+  "soundfile>=0.12",
+  "scikit-learn>=1.4",
+  "faiss-cpu>=1.8",
+  "torch>=2.2",
+  "torchaudio>=2.2",
+  "pyannote.audio>=3.3",
+  "speechbrain>=1.0",
+  "huggingface_hub>=0.23",
+  "yt-dlp>=2024.4.9",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+voiceflock = "voiceflock.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["voiceflock*"]
+
+[tool.setuptools.package-data]
+voiceflock = ["static/*", "schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

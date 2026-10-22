@@ -1,0 +1,141 @@
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- An uploaded file or downloaded URL.
+CREATE TABLE IF NOT EXISTS sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  original_filename TEXT,
+  url TEXT,
+  orig_path TEXT,
+  wav_path TEXT,
+  sha256 TEXT,
+  duration_s REAL,
+  mode TEXT NOT NULL DEFAULT 'bulk',      -- bulk | match | enroll
+  incognito INTEGER NOT NULL DEFAULT 0,
+  enroll_person_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'queued',  -- queued | processing | done | failed | deleted
+  error TEXT,
+  n_speakers INTEGER,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  processed_at TEXT,
+  meta TEXT
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,                      -- process_source
+  source_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'queued',   -- queued | running | done | failed | cancelled
+  priority INTEGER NOT NULL DEFAULT 0,
+  stage TEXT,
+  progress REAL NOT NULL DEFAULT 0,
+  log TEXT,
+  error TEXT,
+  worker TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  started_at TEXT,
+  finished_at TEXT,
+  heartbeat_at TEXT
+);
+CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, priority DESC, id);
+
+-- An identity. kind='named' once you name it; 'provisional' = "Unknown Voice N".
+CREATE TABLE IF NOT EXISTS persons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'provisional',
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT
+);
+
+-- One diarized speaker within one source.
+CREATE TABLE IF NOT EXISTS source_speakers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  speech_seconds REAL NOT NULL DEFAULT 0,
+  n_segments INTEGER NOT NULL DEFAULT 0,
+  first_start_s REAL,
+  quality_score REAL,
+  snr_db REAL,
+  clip_fraction REAL,
+  clip_path TEXT,
+  embedding BLOB,
+  person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
+  assignment TEXT,                         -- auto | confirmed | enrolled | named | NULL
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS ss_source ON source_speakers(source_id);
+CREATE INDEX IF NOT EXISTS ss_person ON source_speakers(person_id);
+
+CREATE TABLE IF NOT EXISTS segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_speaker_id INTEGER NOT NULL REFERENCES source_speakers(id) ON DELETE CASCADE,
+  start_s REAL NOT NULL,
+  end_s REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS seg_ss ON segments(source_speaker_id);
+
+-- Gallery: multiple embeddings per person with provenance.
+CREATE TABLE IF NOT EXISTS prints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  source_id INTEGER,
+  source_speaker_id INTEGER REFERENCES source_speakers(id) ON DELETE CASCADE,
+  embedding BLOB NOT NULL,
+  is_mean INTEGER NOT NULL DEFAULT 0,
+  speech_seconds REAL,
+  quality REAL,
+  origin TEXT NOT NULL,                    -- enroll | confirm | named | auto-cluster | cli
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS prints_person ON prints(person_id);
+CREATE INDEX IF NOT EXISTS prints_ss ON prints(source_speaker_id);
+
+CREATE TABLE IF NOT EXISTS matches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_speaker_id INTEGER NOT NULL REFERENCES source_speakers(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  rank INTEGER NOT NULL,
+  raw_score REAL NOT NULL,
+  norm_score REAL,
+  probability REAL NOT NULL,
+  margin REAL,
+  score_mode TEXT,                         -- raw | snorm
+  status TEXT NOT NULL DEFAULT 'open',     -- open | auto | confirmed | rejected
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS matches_ss ON matches(source_speaker_id);
+CREATE INDEX IF NOT EXISTS matches_person ON matches(person_id);
+
+-- Explicit cohort (impostor) embeddings for adaptive s-norm.
+CREATE TABLE IF NOT EXISTS cohort (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT,
+  embedding BLOB NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS calibrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mode TEXT NOT NULL,                      -- raw | snorm
+  a REAL NOT NULL,
+  b REAL NOT NULL,
+  n_target INTEGER,
+  n_nontarget INTEGER,
+  eer REAL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

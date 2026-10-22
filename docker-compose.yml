@@ -1,0 +1,16 @@
+services:
+  voiceflock:
+    build: .
+    image: voiceflock:latest
+    container_name: voiceflock
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    environment:
+      - VOICEFLOCK_DATA_DIR=/data   # overrides the ./data in .env inside the container
+    volumes:
+      - ./data:/data
+    # Long diarization jobs run inside this container's background worker.
+    # To add workers: docker compose run -d voiceflock voiceflock worker

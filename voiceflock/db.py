@@ -1,0 +1,78 @@
+"""SQLite helpers. One connection per call site; WAL so the web server and the
+worker can read/write concurrently."""
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+import numpy as np
+
+from . import config
+
+_SCHEMA = Path(__file__).with_name("schema.sql").read_text()
+
+
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    config.ensure_dirs()
+    path = path or config.DB_PATH
+    conn = sqlite3.connect(str(path), timeout=60, isolation_level=None, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=60000")
+    return conn
+
+
+def init_db(path: Path | None = None) -> None:
+    conn = connect(path)
+    try:
+        conn.executescript(_SCHEMA)
+        conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('prints_version', '0')")
+        # Orphaned 'running' jobs from a crashed worker go back to the queue.
+        conn.execute("UPDATE jobs SET status='queued', stage=NULL, worker=NULL WHERE status='running'")
+        conn.execute("UPDATE sources SET status='queued' WHERE status='processing'")
+    finally:
+        conn.close()
+
+
+@contextmanager
+def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Explicit transaction (connection is in autocommit mode otherwise)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def bump_prints_version(conn: sqlite3.Connection) -> None:
+    conn.execute("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key='prints_version'")
+
+
+def prints_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT value FROM meta WHERE key='prints_version'").fetchone()
+    return int(row[0]) if row else 0
+
+
+# --- embedding (de)serialisation -------------------------------------------
+
+def emb_to_blob(e: np.ndarray) -> bytes:
+    return np.asarray(e, dtype=np.float32).tobytes()
+
+
+def blob_to_emb(b: bytes | None) -> np.ndarray | None:
+    if b is None:
+        return None
+    return np.frombuffer(b, dtype=np.float32).copy()
+
+
+def rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def row(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> dict | None:
+    r = conn.execute(sql, params).fetchone()
+    return dict(r) if r else None

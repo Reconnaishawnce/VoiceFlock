@@ -1,0 +1,328 @@
+/* VoiceFlock UI: vanilla JS, talks to /api/*. */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtT = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return (h ? h + ":" : "") + String(m).padStart(h ? 2 : 1, "0") + ":" + String(x).padStart(2, "0"); };
+const pct = (p) => (p * 100).toFixed(1) + "%";
+const probCls = (p, thr, hi) => p >= hi ? "hi" : p >= thr ? "mid" : "lo";
+let SETTINGS = {}, SPECS = {}, STATE = { tab: "bulk", matchSource: null, sourceDetail: null, personDetail: null };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts, body: opts.body && typeof opts.body !== "string" ? JSON.stringify(opts.body) : opts.body });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+function toast(msg, err = false) { const t = $("#toast"); t.textContent = msg; t.className = "toast" + (err ? " err" : ""); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), 3500); }
+const onErr = (e) => toast(e.message || String(e), true);
+
+/* ---------------- tabs ---------------- */
+$$("#tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+function showTab(name) {
+  STATE.tab = name;
+  $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== "tab-" + name));
+  location.hash = name;
+  refreshTab();
+}
+function refreshTab() {
+  ({ bulk: loadAlerts, build: loadBuild, match: loadMatch, sources: loadSources, settings: loadSettings })[STATE.tab]?.();
+}
+
+/* ---------------- header ---------------- */
+async function loadStats() {
+  try {
+    const [s, h] = await Promise.all([api("/api/stats"), api("/api/health")]);
+    $("#ver").textContent = "v" + h.version;
+    const q = h.queue || {};
+    $("#stats").innerHTML = `<span><b>${s.persons_named}</b> people</span><span><b>${s.persons_unknown}</b> unnamed voices</span>
+      <span><b>${s.prints}</b> prints</span><span><b>${fmtT(s.sources.seconds)}</b> audio</span>
+      <span>queue: <b>${q.running || 0}</b> running, <b>${q.queued || 0}</b> waiting</span>
+      <span>scoring: <b>${s.score_mode}</b>${s.calibrated ? " (calibrated)" : " (default calibration)"}</span><span>device: <b>${h.device || "?"}</b></span>`;
+    const b = $("#banner");
+    if (!h.hf_token_set) { b.innerHTML = `No HuggingFace token set: diarization will fail. Add it under <a href="#settings" onclick="showTab('settings')">Settings</a> after accepting the model terms on huggingface.co.`; b.classList.remove("hidden"); }
+    else if (!h.ffmpeg) { b.textContent = "ffmpeg not found on PATH. Install it to process audio."; b.classList.remove("hidden"); }
+    else if (!h.torch) { b.textContent = "PyTorch not importable: " + (h.torch_error || ""); b.classList.remove("hidden"); }
+    else b.classList.add("hidden");
+    return (q.running || 0) + (q.queued || 0);
+  } catch (e) { return 0; }
+}
+
+/* ---------------- uploads ---------------- */
+function wireDrop(zoneId, inputId, mode, listId, opts = {}) {
+  const zone = $(zoneId), input = $(inputId);
+  ["dragenter", "dragover"].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove("over"); }));
+  zone.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files], mode, listId, opts));
+  input.addEventListener("change", () => { uploadFiles([...input.files], mode, listId, opts); input.value = ""; });
+}
+function uploadFiles(files, mode, listId, opts) {
+  const list = $(listId);
+  files.forEach((f) => {
+    const row = document.createElement("div"); row.className = "u";
+    row.innerHTML = `<span>${esc(f.name)}</span><div class="bar"><i></i></div><span class="st">0%</span>`;
+    list.prepend(row);
+    const fd = new FormData(); fd.append("files", f); fd.append("mode", mode);
+    fd.append("incognito", opts.incognito ? String(!!opts.incognito()) : "false");
+    if (opts.personName) { const n = opts.personName(); if (!n) { row.querySelector(".st").textContent = "name required"; return; } fd.append("person_name", n); }
+    const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/upload");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) { const p = e.loaded / e.total; row.querySelector("i").style.width = pct(p); row.querySelector(".st").textContent = p < 1 ? pct(p) : "processing…"; } };
+    xhr.onload = () => {
+      if (xhr.status >= 300) { row.querySelector(".st").textContent = "failed"; return onErr(new Error(xhr.responseText)); }
+      const j = JSON.parse(xhr.responseText); const c = j.created[0];
+      if (c.error) { row.querySelector(".st").textContent = c.error; return; }
+      row.dataset.source = c.source_id; row.querySelector(".st").textContent = "queued";
+      if (mode === "match") { STATE.matchSource = c.source_id; }
+      toast(`Queued ${f.name}`); loadStats();
+    };
+    xhr.onerror = () => { row.querySelector(".st").textContent = "network error"; };
+    xhr.send(fd);
+  });
+}
+async function queueUrl(inputId, mode, opts = {}) {
+  const url = $(inputId).value.trim(); if (!url) return;
+  try {
+    const body = { url, mode, incognito: opts.incognito ? !!opts.incognito() : false };
+    if (opts.personName) { body.person_name = opts.personName(); if (!body.person_name) throw new Error("name required"); }
+    const r = await api("/api/upload_url", { method: "POST", body });
+    $(inputId).value = ""; toast("Queued URL as source #" + r.source_id);
+    if (mode === "match") STATE.matchSource = r.source_id;
+    loadStats();
+  } catch (e) { onErr(e); }
+}
+wireDrop("#drop-bulk", "#file-bulk", "bulk", "#upl-bulk", { incognito: () => $("#inc-bulk").checked });
+wireDrop("#drop-match", "#file-match", "match", "#upl-match", { incognito: () => $("#inc-match").checked });
+wireDrop("#drop-enroll", "#file-enroll", "enroll", "#upl-enroll", { personName: () => $("#enroll-name").value.trim() });
+$("#btn-url-bulk").onclick = () => queueUrl("#url-bulk", "bulk", { incognito: () => $("#inc-bulk").checked });
+$("#btn-url-match").onclick = () => queueUrl("#url-match", "match", { incognito: () => $("#inc-match").checked });
+$("#btn-url-enroll").onclick = () => queueUrl("#url-enroll", "enroll", { personName: () => $("#enroll-name").value.trim() });
+
+/* update per-row status of uploads from the queue */
+async function updateUploadRows() {
+  const rows = $$(".uploads .u[data-source]"); if (!rows.length) return;
+  const j = await api("/api/jobs?limit=200").catch(() => ({ jobs: [] }));
+  const bySrc = {}; j.jobs.forEach((x) => { if (!bySrc[x.source_id]) bySrc[x.source_id] = x; });
+  rows.forEach((r) => { const x = bySrc[r.dataset.source]; if (!x) return; const st = r.querySelector(".st");
+    if (x.status === "running") { st.textContent = `${x.stage || "running"} ${Math.round(x.progress)}%`; r.querySelector("i").style.width = x.progress + "%"; }
+    else if (x.status === "done") { st.innerHTML = `done · <a class="link" onclick="openSource(${x.source_id})">view</a>`; }
+    else st.textContent = x.status + (x.error ? ": " + x.error : "");
+  });
+}
+
+/* ---------------- shared renderers ---------------- */
+function heardIn(list, cur) {
+  if (!list || !list.length) return `<span class="muted">(no other recordings)</span>`;
+  return list.map((h) => `<a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}`).join(", ");
+}
+function confirmReminder(p) {
+  const hi = Number(SETTINGS.confirm_threshold || 0.9);
+  return p < hi ? `<div class="warnbox">Reminder: only Confirm when you are very sure. This match is ${pct(p)}, below your ${pct(hi)} high-confidence bar. Confirming adds this voice to the person's prints; a wrong confirm pollutes them. (Undo is available.)</div>` : "";
+}
+function candidateTable(sp, src) {
+  const thr = Number(SETTINGS.match_threshold || 0.75), hi = Number(SETTINGS.confirm_threshold || 0.9);
+  if (!sp.candidates.length) return `<div class="muted">No candidates (empty gallery).</div>`;
+  return `<table><tr><th>#</th><th>Candidate</th><th>Probability</th><th>Margin vs #2</th><th>Score</th><th>Heard in</th><th></th></tr>` +
+    sp.candidates.map((c) => {
+      const mine = sp.person_id === c.person_id;
+      const act = c.status === "confirmed" ? `<span class="pill named">confirmed</span> <button class="small" onclick="unassign(${sp.id})">undo</button>`
+        : c.status === "rejected" ? `<span class="pill">rejected</span>`
+        : `<button class="small primary" onclick="confirmMatch(${c.id}, ${c.probability})">Confirm</button> <button class="small" onclick="rejectMatch(${c.id})">Reject</button>`;
+      return `<tr><td>${c.rank}</td><td><a class="link" onclick="openPerson(${c.person_id})">${esc(c.person_name)}</a><span class="pill ${c.person_kind}">${c.person_kind === "named" ? "known" : "unnamed"}</span>${mine ? '<span class="pill named">assigned</span>' : ""}</td>
+        <td><span class="prob ${probCls(c.probability, thr, hi)}">${pct(c.probability)}</span><div class="pbar"><i style="width:${pct(c.probability)}"></i></div></td>
+        <td>${c.rank === 1 ? "+" + pct(c.margin) : ""}</td><td class="muted">${c.score_mode}=${c.norm_score.toFixed(2)}<br>cos=${c.raw_score.toFixed(3)}</td>
+        <td class="sub">${heardIn(c.heard_in)}</td><td>${act}</td></tr>`;
+    }).join("") + `</table>`;
+}
+function speakerCard(sp, src) {
+  const thr = Number(src.settings?.match_threshold ?? SETTINGS.match_threshold ?? 0.75);
+  const top = sp.candidates[0];
+  let verdict;
+  if (sp.person && sp.assignment === "enrolled") verdict = `Enrolled as <b>${esc(sp.person.name)}</b>`;
+  else if (sp.person && (sp.assignment === "confirmed" || sp.assignment === "named")) verdict = `<b>${esc(sp.person.name)}</b> <span class="pill named">${sp.assignment}</span>`;
+  else if (top && top.probability >= thr && top.person_kind === "named") verdict = `We think this is <b>${esc(top.person_name)}</b> (${pct(top.probability)})`;
+  else if (sp.person && sp.person.kind === "provisional") verdict = `Unnamed voice: <b>${esc(sp.person.name)}</b> <span class="muted">(not matched to anyone known)</span>`;
+  else if (src.incognito) verdict = `<b>Unknown</b> <span class="muted">(incognito: not saved)</span>`;
+  else verdict = `<b>Unknown</b> <span class="muted">(below threshold${top ? `, best ${esc(top.person_name)} ${pct(top.probability)}` : ""})</span>`;
+  return `<div class="spk" id="spk-${sp.id}">
+    <div class="hdr"><div><span class="title">${esc(sp.label)}</span> · ${verdict}</div>
+      <div class="q">speech <b>${fmtT(sp.speech_seconds)}</b> · quality <b>${sp.quality_score?.toFixed(0) ?? "-"}</b>/100 · SNR <b>${sp.snr_db?.toFixed(0) ?? "-"} dB</b> · ${sp.n_segments} turns · first at ${fmtT(sp.first_start_s)}</div></div>
+    ${sp.clip_url ? `<audio controls preload="none" src="${sp.clip_url}"></audio>` : `<div class="muted">no preview clip (incognito)</div>`}
+    ${candidateTable(sp, src)}
+    <div class="actions">
+      <input placeholder="Name this voice…" list="person-names" id="nm-${sp.id}" style="max-width:240px">
+      <button class="small" onclick="nameSpeaker(${sp.id})">Name</button>
+      ${sp.person_id ? `<button class="small" onclick="unassign(${sp.id})">Unassign / undo</button>` : ""}
+    </div></div>`;
+}
+function sourceView(src) {
+  const inc = src.incognito ? '<span class="pill">incognito</span>' : "";
+  const st = `<span class="pill ${src.status}">${src.status}</span>`;
+  const job = src.job && src.job.status === "running" ? `<div class="sub">${esc(src.job.stage)} ${Math.round(src.job.progress)}%</div>` : "";
+  const err = src.error ? `<div class="warnbox">${esc(src.error)}</div>` : "";
+  return `<div class="hdr"><h2>${esc(src.name)} ${st}${inc} <span class="pill">${src.mode}</span></h2>
+    <div class="q">${src.duration_s ? fmtT(src.duration_s) : ""} · ${src.n_speakers ?? "?"} speakers · uploaded ${esc((src.created_at || "").slice(0, 16).replace("T", " "))}</div></div>${job}${err}
+    ${src.has_audio ? `<audio controls preload="none" src="/api/sources/${src.id}/audio"></audio>` : ""}
+    <div class="actions">
+      ${src.incognito ? "" : `<button class="small" onclick="forgetSource(${src.id})" title="Remove everything this recording added to the voice database">Forget voices from this file</button>`}
+      <button class="small" onclick="reprocess(${src.id})">Reprocess</button>
+      <button class="small danger" onclick="deleteSource(${src.id})">Delete recording</button>
+    </div>
+    ${(src.speakers || []).map((sp) => speakerCard(sp, src)).join("") || (src.status === "done" ? '<p class="muted">No speakers passed the minimum speech length.</p>' : "")}`;
+}
+
+/* ---------------- actions ---------------- */
+async function confirmMatch(id, p) {
+  const hi = Number(SETTINGS.confirm_threshold || 0.9);
+  if (p < hi && !confirm(`This match is ${pct(p)}, below your ${pct(hi)} high-confidence bar.\n\nOnly confirm when you are very sure: confirming adds this voice to the person's prints. Confirm anyway?`)) return;
+  try { await api(`/api/matches/${id}/confirm`, { method: "POST" }); toast("Confirmed"); refreshTab(); loadStats(); } catch (e) { onErr(e); }
+}
+async function rejectMatch(id) { try { await api(`/api/matches/${id}/reject`, { method: "POST" }); toast("Rejected"); refreshTab(); } catch (e) { onErr(e); } }
+async function unassign(id) { try { await api(`/api/speakers/${id}/unassign`, { method: "POST" }); toast("Unassigned"); refreshTab(); loadStats(); } catch (e) { onErr(e); } }
+async function nameSpeaker(id) {
+  const name = $(`#nm-${id}`).value.trim(); if (!name) return toast("Type a name first", true);
+  try { await api(`/api/speakers/${id}/name`, { method: "POST", body: { name } }); toast(`Saved as ${name}`); refreshTab(); loadStats(); loadNames(); } catch (e) { onErr(e); }
+}
+async function forgetSource(id) { if (!confirm("Remove all prints and unnamed voices created from this recording? Results stay visible.")) return; try { const r = await api(`/api/sources/${id}/forget`, { method: "POST" }); toast(`Forgot: removed ${r.removed_unknown_voices} unnamed voice(s)`); refreshTab(); loadStats(); } catch (e) { onErr(e); } }
+async function reprocess(id) { try { await api(`/api/sources/${id}/reprocess`, { method: "POST" }); toast("Queued for reprocessing"); refreshTab(); } catch (e) { onErr(e); } }
+async function deleteSource(id) { if (!confirm("Delete this recording, its clips and everything it added to the database?")) return; try { await api(`/api/sources/${id}`, { method: "DELETE" }); toast("Deleted"); STATE.sourceDetail = null; if (STATE.matchSource === id) STATE.matchSource = null; refreshTab(); loadStats(); } catch (e) { onErr(e); } }
+async function openSource(id) { STATE.sourceDetail = id; showTab("sources"); setTimeout(() => $("#source-detail").scrollIntoView({ behavior: "smooth" }), 50); }
+async function openPerson(id) { STATE.personDetail = id; showTab("build"); setTimeout(() => $("#person-detail").scrollIntoView({ behavior: "smooth" }), 50); }
+async function namePerson(id) {
+  const name = $(`#pn-${id}`).value.trim(); if (!name) return toast("Type a name first", true);
+  try { await api(`/api/persons/${id}`, { method: "PATCH", body: { name } }); toast(`Named ${name}`); loadBuild(); loadStats(); loadNames(); } catch (e) { onErr(e); }
+}
+async function mergePerson(id) {
+  const into = $(`#mg-${id}`).value; if (!into) return;
+  if (!confirm("Merge this voice into the selected one? Prints and recordings move over; this entry is deleted.")) return;
+  try { await api(`/api/persons/${id}/merge`, { method: "POST", body: { into_id: Number(into) } }); toast("Merged"); loadBuild(); loadStats(); } catch (e) { onErr(e); }
+}
+async function deletePerson(id) { if (!confirm("Delete this voice and all its prints?")) return; try { await api(`/api/persons/${id}`, { method: "DELETE" }); toast("Deleted"); STATE.personDetail = null; loadBuild(); loadStats(); loadNames(); } catch (e) { onErr(e); } }
+async function renamePerson(id) { const name = prompt("New name?"); if (!name) return; try { await api(`/api/persons/${id}`, { method: "PATCH", body: { name } }); loadBuild(); loadNames(); } catch (e) { onErr(e); } }
+async function loadNames() {
+  const j = await api("/api/persons?kind=named").catch(() => ({ persons: [] }));
+  $("#person-names").innerHTML = j.persons.map((p) => `<option value="${esc(p.name)}">`).join("");
+  return j.persons;
+}
+
+/* ---------------- bulk / alerts ---------------- */
+async function loadAlerts() {
+  try {
+    const a = await api("/api/alerts");
+    $("#alert-hint").textContent = `Matches at or above your ${pct(SETTINGS.match_threshold || 0.75)} threshold. Confirm only when very sure (≥ ${pct(a.confirm_threshold)}).`;
+    const thr = Number(SETTINGS.match_threshold || 0.75);
+    $("#alerts-known").innerHTML = a.known.length ? a.known.map((k) => `<div class="item">
+      <div class="title">We think <a class="link" onclick="openPerson(${k.person_id})">${esc(k.person_name)}</a> is in <a class="link" onclick="openSource(${k.source_id})">${esc(k.source_name)}</a> at ${fmtT(k.first_start_s)}
+        <span class="prob ${probCls(k.probability, thr, a.confirm_threshold)}">${pct(k.probability)}</span> <span class="muted">(+${pct(k.margin)} over #2)</span> ${k.status === "confirmed" ? '<span class="pill named">confirmed</span>' : ""}</div>
+      <div class="sub">Check against: ${heardIn(k.heard_in)} · speech ${fmtT(k.speech_seconds)} · quality ${Math.round(k.quality_score || 0)}/100</div>
+      ${k.clip_url ? `<audio controls preload="none" src="${k.clip_url}"></audio>` : ""}
+      ${k.status === "confirmed" ? "" : confirmReminder(k.probability)}
+      <div class="actions">${k.status === "confirmed" ? `<button class="small" onclick="unassign(${k.speaker_id})">Undo confirm</button>` : `<button class="small primary" onclick="confirmMatch(${k.match_id}, ${k.probability})">Confirm</button><button class="small" onclick="rejectMatch(${k.match_id})">Reject</button>`}
+        <button class="small" onclick="openSource(${k.source_id})">Open recording</button></div></div>`).join("") : `<p class="muted">Nothing yet. Enroll people under Build Database, then scan files.</p>`;
+    $("#alerts-recurring").innerHTML = a.recurring_unknown.length ? a.recurring_unknown.map((r) => `<div class="item">
+      <div class="title"><a class="link" onclick="openPerson(${r.person_id})">${esc(r.name)}</a> heard in <b>${r.n_sources}</b> recordings (${fmtT(r.speech_seconds)} of speech)</div>
+      <div class="sub">${heardIn(r.heard_in)}</div>
+      ${r.heard_in[0]?.clip_url ? `<audio controls preload="none" src="${r.heard_in[0].clip_url}"></audio>` : ""}
+      <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}"><button class="small" onclick="namePerson(${r.person_id})">Name</button></div></div>`).join("") : `<p class="muted">No unnamed voice has shown up in two or more recordings yet.</p>`;
+  } catch (e) { onErr(e); }
+}
+
+/* ---------------- build database ---------------- */
+async function loadBuild() {
+  try {
+    const [u, named] = await Promise.all([api("/api/voices/unnamed"), loadNames()]);
+    $("#unnamed-count").textContent = `(${u.voices.length})`;
+    const mergeOpts = (self) => `<option value="">Merge into…</option>` + u.voices.filter((v) => v.id !== self).map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("") + named.map((p) => `<option value="${p.id}">${esc(p.name)} (known)</option>`).join("");
+    $("#unnamed").innerHTML = u.voices.length ? `<div class="grid">` + u.voices.map((v) => `<div class="vcard">
+      <div class="nm">${esc(v.name)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
+      ${v.heard_in.slice(0, 3).map((h) => `<div class="sub"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}</div>${h.clip_url ? `<audio controls preload="none" src="${h.clip_url}"></audio>` : ""}`).join("")}
+      <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
+      <div class="inline"><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div>
+    </div>`).join("") + `</div>` : `<p class="muted">No unnamed voices yet. Scan some recordings.</p>`;
+    renderPeople(named);
+    if (STATE.personDetail) loadPersonDetail(STATE.personDetail); else $("#person-detail").classList.add("hidden");
+  } catch (e) { onErr(e); }
+}
+function renderPeople(list) {
+  const q = ($("#person-search").value || "").toLowerCase();
+  $("#people").innerHTML = list.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item"><a class="link" onclick="openPerson(${p.id})">${esc(p.name)}</a>
+    <span class="muted">· ${p.n_prints} prints · ${p.n_sources} rec · ${fmtT(p.speech_seconds)}</span></div>`).join("") || `<p class="muted">No people yet.</p>`;
+}
+$("#person-search").addEventListener("input", () => loadNames().then(renderPeople));
+async function loadPersonDetail(id) {
+  try {
+    const p = await api(`/api/persons/${id}`);
+    const el = $("#person-detail"); el.classList.remove("hidden");
+    el.innerHTML = `<div class="hdr"><h2>${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span></h2>
+      <div class="actions"><button class="small" onclick="renamePerson(${p.id})">Rename</button><button class="small danger" onclick="deletePerson(${p.id})">Delete</button><button class="small" onclick="STATE.personDetail=null;loadBuild()">Close</button></div></div>
+      <div class="sub">${p.n_prints} prints from ${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech ${p.notes ? "· " + esc(p.notes) : ""}</div>
+      <h3>Heard in</h3>${p.heard_in.map((h) => `<div class="item"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)} <span class="pill">${esc(h.assignment)}</span>
+        ${h.clip_url ? `<audio controls preload="none" src="${h.clip_url}"></audio>` : ""}<div class="actions"><button class="small" onclick="unassign(${h.speaker_id})">Remove this recording from the person (undo)</button></div></div>`).join("") || '<p class="muted">none</p>'}
+      <h3>Prints (provenance)</h3><table><tr><th>id</th><th>type</th><th>origin</th><th>recording</th><th>speech</th><th>quality</th><th>added</th></tr>
+      ${p.prints.map((pr) => `<tr><td>${pr.id}</td><td>${pr.is_mean ? "mean" : "chunk"}</td><td>${esc(pr.origin)}</td><td>${pr.source_id ? `<a class="link" onclick="openSource(${pr.source_id})">${esc(pr.source_name)}</a> / ${esc(pr.label)}` : "cli"}</td><td>${pr.speech_seconds ? fmtT(pr.speech_seconds) : ""}</td><td>${pr.quality ?? ""}</td><td class="muted">${esc((pr.created_at || "").slice(0, 16))}</td></tr>`).join("")}</table>
+      <h3>Recent matches</h3>${p.matches.slice(0, 20).map((m) => `<div class="item"><a class="link" onclick="openSource(${m.source_id})">${esc(m.source_name)}</a> / ${esc(m.label)} · <span class="prob">${pct(m.probability)}</span> <span class="pill">${m.status}</span></div>`).join("") || '<p class="muted">none</p>'}`;
+  } catch (e) { onErr(e); }
+}
+
+/* ---------------- match ---------------- */
+async function loadMatch() {
+  try {
+    const j = await api("/api/sources?mode=match&limit=15");
+    $("#match-recent").innerHTML = j.sources.map((s) => `<div class="item"><a class="link" onclick="STATE.matchSource=${s.id};loadMatch()">${esc(s.name)}</a> <span class="pill ${s.status}">${s.status}</span>${s.incognito ? '<span class="pill">incognito</span>' : ""}
+      <div class="sub">${s.speakers.map((sp) => sp.top_name ? `${esc(sp.label)}→${esc(sp.top_name)} ${pct(sp.top_prob)}` : esc(sp.label)).join(" · ")}</div></div>`).join("") || '<p class="muted">No match uploads yet.</p>';
+    if (!STATE.matchSource && j.sources.length) STATE.matchSource = j.sources[0].id;
+    if (STATE.matchSource) { const src = await api(`/api/sources/${STATE.matchSource}`); $("#match-result").innerHTML = sourceView(src); }
+  } catch (e) { onErr(e); }
+}
+
+/* ---------------- sources & queue ---------------- */
+async function loadSources() {
+  try {
+    const [j, q] = await Promise.all([api("/api/sources?limit=200"), api("/api/jobs?limit=50")]);
+    $("#jobs").innerHTML = q.jobs.filter((x) => x.status !== "cancelled").slice(0, 30).map((x) => `<div class="item"><span class="pill ${x.status}">${x.status}</span> <a class="link" onclick="openSource(${x.source_id})">${esc(x.source_name || "#" + x.source_id)}</a>
+      <div class="sub">${x.status === "running" ? `${esc(x.stage || "")} ${Math.round(x.progress)}%<div class="bar"><i style="width:${x.progress}%"></i></div>` : x.status === "failed" ? `<span class="warnbox">${esc(x.error)}</span> <button class="small" onclick="retryJob(${x.id})">retry</button>` : x.status === "queued" ? `<button class="small" onclick="cancelJob(${x.id})">cancel</button>` : esc((x.finished_at || "").slice(0, 16).replace("T", " "))}</div></div>`).join("") || '<p class="muted">Queue is empty.</p>';
+    $("#sources").innerHTML = `<table><tr><th>Recording</th><th>Mode</th><th>Status</th><th>Length</th><th>Speakers</th><th></th></tr>` + j.sources.map((s) => `<tr>
+      <td><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a>${s.incognito ? '<span class="pill">incognito</span>' : ""}</td><td>${s.mode}</td>
+      <td><span class="pill ${s.status}">${s.status}</span>${s.job && s.job.status === "running" ? ` <span class="muted">${Math.round(s.job.progress)}%</span>` : ""}</td>
+      <td>${s.duration_s ? fmtT(s.duration_s) : ""}</td>
+      <td class="sub">${s.speakers.map((sp) => sp.person_name ? `<span class="pill ${sp.person_kind}">${esc(sp.person_name)}</span>` : sp.top_name ? `<span class="muted">${esc(sp.label)}≈${esc(sp.top_name)} ${pct(sp.top_prob)}</span>` : `<span class="muted">${esc(sp.label)}</span>`).join(" ")}</td>
+      <td><button class="small danger" onclick="deleteSource(${s.id})">✕</button></td></tr>`).join("") + `</table>`;
+    if (STATE.sourceDetail) { const src = await api(`/api/sources/${STATE.sourceDetail}`).catch(() => null); const el = $("#source-detail"); if (src) { el.classList.remove("hidden"); el.innerHTML = `<div class="actions" style="float:right"><button class="small" onclick="STATE.sourceDetail=null;loadSources()">Close</button></div>` + sourceView(src); } else el.classList.add("hidden"); }
+    else $("#source-detail").classList.add("hidden");
+  } catch (e) { onErr(e); }
+}
+async function retryJob(id) { try { await api(`/api/jobs/${id}/retry`, { method: "POST" }); loadSources(); } catch (e) { onErr(e); } }
+async function cancelJob(id) { try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); loadSources(); } catch (e) { onErr(e); } }
+
+/* ---------------- settings ---------------- */
+async function loadSettings() {
+  try {
+    const j = await api("/api/settings"); SETTINGS = j.values; SPECS = j.specs;
+    const groups = {}; Object.entries(SPECS).forEach(([k, s]) => (groups[s.group] ||= []).push(k));
+    const f = $("#settings-form"); f.className = "sform";
+    f.innerHTML = Object.entries(groups).map(([g, keys]) => `<div class="grp">${g}</div>` + keys.map((k) => { const s = SPECS[k], v = SETTINGS[k];
+      const input = s.type === "bool" ? `<input type="checkbox" name="${k}" ${v ? "checked" : ""}>` : s.type === "secret" ? `<input type="password" name="${k}" value="${esc(v)}" autocomplete="off">` : s.type === "float" ? `<input type="number" step="0.01" name="${k}" value="${v}">` : s.type === "int" ? `<input type="number" step="1" name="${k}" value="${v}">` : `<input name="${k}" value="${esc(v)}">`;
+      return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
+    const st = await api("/api/stats");
+    $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort size ${st.cohort_size}, min ${SETTINGS.cohort_min_size})\ncalibration: ${st.calibrated ? "fitted by `voiceflock calibrate`" : "defaults"}  raw a=${st.calibration.raw.a.toFixed(3)} b=${st.calibration.raw.b.toFixed(3)}  snorm a=${st.calibration.snorm.a.toFixed(3)} b=${st.calibration.snorm.b.toFixed(3)}`;
+  } catch (e) { onErr(e); }
+}
+$("#btn-save-settings").onclick = async (e) => {
+  e.preventDefault();
+  const body = {}; $$("#settings-form [name]").forEach((i) => { body[i.name] = i.type === "checkbox" ? i.checked : i.value; });
+  try { const j = await api("/api/settings", { method: "PUT", body }); SETTINGS = j.values; $("#settings-msg").textContent = "Saved."; toast("Settings saved"); loadStats(); } catch (er) { onErr(er); }
+};
+
+/* ---------------- boot & polling ---------------- */
+(async function boot() {
+  const j = await api("/api/settings").catch(() => ({ values: {}, specs: {} })); SETTINGS = j.values; SPECS = j.specs;
+  $("#inc-match").checked = !!SETTINGS.incognito_default; $("#inc-bulk").checked = !!SETTINGS.incognito_default;
+  loadNames();
+  showTab(location.hash.replace("#", "") || "bulk");
+  loadStats();
+  let lastBusy = 0;
+  setInterval(async () => {
+    const busy = await loadStats(); updateUploadRows();
+    if (busy || lastBusy) { if (STATE.tab !== "settings" && !document.activeElement?.matches("input,select,textarea")) refreshTab(); }
+    lastBusy = busy;
+  }, 3000);
+})();
