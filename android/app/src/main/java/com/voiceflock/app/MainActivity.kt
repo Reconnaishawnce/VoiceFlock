@@ -1,14 +1,19 @@
 package com.voiceflock.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -33,7 +38,35 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Alerts.ensureChannels(this)
         if (AppState.gallery.value == null) AppState.gallery.value = Gallery.load(this)
+        handleShare(intent)
         setContent { MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF5AD1A8))) { App() } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    /** "Share → VoiceFlock" or "Open with VoiceFlock" on a library file from WhatsApp, email, Drive... */
+    private fun handleShare(intent: Intent?) {
+        val uri: Uri = when (intent?.action) {
+            Intent.ACTION_SEND -> @Suppress("DEPRECATION") intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            Intent.ACTION_VIEW -> intent.data
+            else -> null
+        } ?: return
+        importLibraryUri(this, uri)
+    }
+}
+
+fun importLibraryUri(ctx: android.content.Context, uri: Uri) {
+    try {
+        val text = ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText()
+        val g = Sync.importLibrary(ctx, text)
+        AppState.gallery.value = g
+        Prefs(ctx).lastSync = "file import " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())
+        Toast.makeText(ctx, "Imported ${g.people.size} voices", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        Toast.makeText(ctx, "Not a VoiceFlock library file: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
 
@@ -150,6 +183,11 @@ fun VoicesScreen() {
     }
 }
 
+fun modelLine(ctx: android.content.Context): String {
+    val f = Gallery.modelFile(ctx)
+    return if (f.exists()) "Speaker model: ready (${f.length() shr 20} MB)" else "Speaker model: not downloaded yet"
+}
+
 @Composable
 fun SettingsScreen() {
     val ctx = LocalContext.current
@@ -161,8 +199,27 @@ fun SettingsScreen() {
     var busy by remember { mutableStateOf(false) }
     var thr by remember { mutableFloatStateOf(prefs.thresholdOverride) }
     val gallery by AppState.gallery.collectAsStateWithLifecycle()
-    Column(Modifier.padding(16.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Laptop", style = MaterialTheme.typography.titleSmall)
+    var modelStatus by remember { mutableStateOf(modelLine(ctx)) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) { importLibraryUri(ctx, uri); status = "library imported from file" }
+    }
+    Column(Modifier.padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("No network needed: two files", style = MaterialTheme.typography.titleSmall)
+        Text("1. Voice library: on the laptop, Settings → \"Download phone library\", send the .json to this phone (WhatsApp, email, Drive) and open it with VoiceFlock, or pick it here.\n2. Speaker model: one 85 MB download from GitHub.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { picker.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")) }, modifier = Modifier.weight(1f)) { Text("Import library file") }
+            OutlinedButton(enabled = !busy, onClick = {
+                busy = true
+                scope.launch {
+                    try { Sync.downloadModelFromInternet(ctx) { modelStatus = it } } catch (e: Exception) { modelStatus = "model download failed: ${e.message}" }
+                    modelStatus = modelLine(ctx); busy = false
+                }
+            }, modifier = Modifier.weight(1f)) { Text("Download model") }
+        }
+        Text(modelStatus, style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
+        Text("Or sync from the laptop directly (same Wi-Fi or Tailscale)", style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(url, { url = it }, label = { Text("VoiceFlock address, e.g. http://192.168.1.20:8787 or your Tailscale name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(pw, { pw = it }, label = { Text("Password (if set in .env)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Button(
@@ -174,7 +231,7 @@ fun SettingsScreen() {
                         val g = Sync.run(ctx, prefs) { status = it }
                         AppState.gallery.value = g
                     } catch (e: Exception) { status = "sync failed: ${e.message}" }
-                    busy = false
+                    modelStatus = modelLine(ctx); busy = false
                 }
             }, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Syncing…" else "Sync voices + model") }
         Text(status, style = MaterialTheme.typography.bodyMedium)

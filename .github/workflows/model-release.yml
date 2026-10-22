@@ -1,0 +1,39 @@
+name: model-release
+# Exports the ECAPA speaker encoder to ONNX (same code the laptop uses) and publishes it as a
+# GitHub Release asset, so the phone can download it without the laptop.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["voiceflock/onnx_export.py", ".github/workflows/model-release.yml"]
+permissions:
+  contents: write
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e .
+      - name: Export + verify
+        run: |
+          python -m voiceflock export-model --out model_out | tee export.json
+          python - <<'PY'
+          import json; m = json.load(open("model_out/ecapa_voxceleb.onnx.json"))
+          assert m["wrapper_vs_speechbrain_cosine"] > 0.999 and (m.get("onnx_vs_speechbrain_cosine") or 1) > 0.999, m
+          print(m)
+          PY
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: model-ecapa-v1
+          name: Speaker model (ECAPA-TDNN VoxCeleb, ONNX)
+          body: |
+            `ecapa_voxceleb.onnx`: SpeechBrain `spkrec-ecapa-voxceleb` (Apache-2.0) exported with feature extraction
+            inside the graph. Input `wav` float32 (1, T) at 16 kHz, output `embedding` (1, 192) L2-normalised.
+            The phone app downloads this file; the laptop produces an identical one with `voiceflock export-model`.
+          files: |
+            model_out/ecapa_voxceleb.onnx
+            model_out/ecapa_voxceleb.onnx.json

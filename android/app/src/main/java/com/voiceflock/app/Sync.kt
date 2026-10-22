@@ -13,6 +13,48 @@ import java.net.URL
 object Sync {
     class SyncError(msg: String) : Exception(msg)
 
+    /** Public copy of the exported speaker model (same bytes the laptop serves). */
+    const val MODEL_URL = "https://github.com/Reconnaishawnce/VoiceFlock/releases/download/model-ecapa-v1/ecapa_voxceleb.onnx"
+
+    /** Save a library file received by WhatsApp/email/file picker. Returns the parsed gallery. */
+    fun importLibrary(context: Context, text: String): Gallery {
+        val g = Gallery.parse(text)            // throws if it is not a VoiceFlock library
+        Gallery.file(context).writeText(text)
+        return g
+    }
+
+    /** Download the model from GitHub (no laptop needed). */
+    suspend fun downloadModelFromInternet(context: Context, status: (String) -> Unit): File = withContext(Dispatchers.IO) {
+        val model = Gallery.modelFile(context)
+        var url = URL(MODEL_URL)
+        var c: HttpURLConnection
+        var hops = 0
+        while (true) {                           // follow GitHub's redirect to the CDN by hand (http->https safe)
+            c = url.openConnection() as HttpURLConnection
+            c.instanceFollowRedirects = false
+            c.connectTimeout = 15000; c.readTimeout = 120000
+            val code = c.responseCode
+            if (code in 300..399 && hops < 5) { url = URL(url, c.getHeaderField("Location")); hops++; continue }
+            if (code != 200) throw SyncError("model download failed: HTTP $code")
+            break
+        }
+        status("downloading speaker model (≈85 MB, once)…")
+        val tmp = File(model.path + ".part")
+        c.inputStream.use { inp -> tmp.outputStream().use { out ->
+            val buf = ByteArray(1 shl 16)
+            var total = 0L
+            while (true) {
+                val n = inp.read(buf); if (n < 0) break
+                out.write(buf, 0, n); total += n
+                if (total % (4L shl 20) < (1 shl 16)) status("model: ${total shr 20} MB")
+            }
+        } }
+        if (tmp.length() < 10_000_000) { tmp.delete(); throw SyncError("model download incomplete") }
+        tmp.renameTo(model)
+        status("model ready (${model.length() shr 20} MB)")
+        model
+    }
+
     private fun open(prefs: Prefs, path: String, method: String = "GET"): HttpURLConnection {
         val c = URL(prefs.serverUrl + path).openConnection() as HttpURLConnection
         c.requestMethod = method

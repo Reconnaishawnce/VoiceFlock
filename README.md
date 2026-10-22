@@ -231,9 +231,11 @@ network, and audio is never stored or sent anywhere.
    `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`
    repository secrets (a keystore made with `keytool -genkeypair -storetype PKCS12`); without them each
    build is signed with a throwaway key and needs an uninstall first.
-3. **Sync**: in the app's Settings enter the laptop address (LAN IP or Tailscale name, with `:8787`) and the
-   password if you set one, press **Sync voices + model**. The first sync makes the laptop export the model
-   (about a minute) and downloads ≈85 MB once; later syncs are a few hundred KB.
+3. **Get the library onto the phone.** Simplest, no network setup: laptop Settings → *Download phone
+   library (.json)*, send that small file to the phone (WhatsApp, email, Drive) and open it with VoiceFlock
+   (or Settings → *Import library file*). Then press *Download model* once (85 MB from GitHub). Re-send the
+   library whenever you flag or name voices. Alternatively, with the phone on the same Wi-Fi or Tailscale,
+   enter the laptop address in the app's Settings and press **Sync voices + model**.
 4. **Listen**: Start listening. A foreground notification shows it's running; alerts arrive even with the
    screen off. The Voices tab lets you flag/unflag on the phone (overrides the laptop's flags) or alert on
    every known voice. Re-sync whenever the library changes.

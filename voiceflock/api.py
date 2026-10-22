@@ -923,7 +923,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
 
     # ---------------------------------------------------------------- phone sync
     @app.get("/api/mobile/gallery.json")
-    def mobile_gallery(max_prints: int = 4, conn=Depends(get_conn)):
+    def mobile_gallery(max_prints: int = 4, download: bool = False, conn=Depends(get_conn)):
         """Compact gallery for the phone: per person the mean print plus a few chunk prints, alert flags,
         raw-cosine calibration and the match threshold."""
         import base64
@@ -937,11 +937,15 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 continue
             prints = [base64.b64encode(db.emb_to_blob(gallery.l2n(db.blob_to_emb(r["embedding"])))).decode() for r in rows]
             people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]), "prints": prints})
-        return {"format": "voiceflock-mobile", "version": 1, "generated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+        data = {"format": "voiceflock-mobile", "version": 1, "generated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
                 "dim": config.EMBED_DIM, "sample_rate": 16000, "match_threshold": float(settings["match_threshold"]),
                 "calibration": {"a": cal.a, "b": cal.b}, "window_s": float(settings["live_window_s"]), "hop_s": float(settings["live_hop_s"]),
                 "min_level_db": float(settings["live_min_level_db"]), "model": onnx_export.MODEL_FILE, "model_meta": onnx_export.meta(),
                 "people": people}
+        if download:
+            return Response(json.dumps(data), media_type="application/json",
+                            headers={"Content-Disposition": f"attachment; filename=voiceflock-library-{__import__('time').strftime('%Y%m%d')}.json"})
+        return data
 
     @app.get("/api/mobile/model.onnx")
     def mobile_model(conn=Depends(get_conn)):
