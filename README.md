@@ -223,9 +223,14 @@ network, and audio is never stored or sent anywhere.
 
 1. **Flag voices** on the laptop: the 🔔 next to any person (people list, person page, unnamed-voice cards).
    Flagged voices also light up in the laptop's Live tab.
-2. **Get the APK**: GitHub → Actions → *android-apk* → download `VoiceFlock-debug-apk` (built on every push
-   that touches `android/`), or open `android/` in Android Studio and run it. Allow "install unknown apps"
-   for your browser/file manager when sideloading.
+2. **Get the APK**: every push to `main` that touches `android/` publishes a GitHub Release with the APKs.
+   With **Obtainium** add the app from `https://github.com/Reconnaishawnce/VoiceFlock` (it picks the newest
+   release; choose the `arm64-v8a` asset for a modern phone, `universal` otherwise) and it will keep the app
+   updated. Or download the APK from the Releases page, or open `android/` in Android Studio.
+   For updates to install over an existing copy the builds must share one signing key: add the
+   `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`
+   repository secrets (a keystore made with `keytool -genkeypair -storetype PKCS12`); without them each
+   build is signed with a throwaway key and needs an uninstall first.
 3. **Sync**: in the app's Settings enter the laptop address (LAN IP or Tailscale name, with `:8787`) and the
    password if you set one, press **Sync voices + model**. The first sync makes the laptop export the model
    (about a minute) and downloads ≈85 MB once; later syncs are a few hundred KB.

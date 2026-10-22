@@ -4,6 +4,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// CI passes -PversionCode=<run number> -PversionName=<x.y.z>; local builds use the defaults below.
+val vCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+val vName = (project.findProperty("versionName") as String?) ?: "0.1.0"
+// Release signing from the environment (GitHub secrets); absent -> the debug key, so local builds still work.
+val ksPath = System.getenv("VOICEFLOCK_KEYSTORE")
+val ksPass = System.getenv("VOICEFLOCK_KEYSTORE_PASSWORD")
+val ksAlias = System.getenv("VOICEFLOCK_KEY_ALIAS")
+val ksKeyPass = System.getenv("VOICEFLOCK_KEY_PASSWORD")
+
 android {
     namespace = "com.voiceflock.app"
     compileSdk = 34
@@ -12,13 +21,33 @@ android {
         applicationId = "com.voiceflock.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = vCode
+        versionName = vName
+    }
+    signingConfigs {
+        if (ksPath != null && ksPass != null && ksAlias != null && ksKeyPass != null) {
+            create("upload") {
+                storeFile = file(ksPath)
+                storePassword = ksPass
+                keyAlias = ksAlias
+                keyPassword = ksKeyPass
+            }
+        }
     }
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
+        }
+    }
+    // one APK per CPU type keeps the download ~25 MB instead of ~90 MB; the universal one is for Obtainium
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
         }
     }
     compileOptions {

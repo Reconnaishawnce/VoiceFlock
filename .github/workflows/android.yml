@@ -1,11 +1,18 @@
 name: android-apk
+# Builds the phone app and publishes it as a GitHub Release so Obtainium can install and update it:
+#   Obtainium -> Add App -> https://github.com/Reconnaishawnce/VoiceFlock
 on:
   push:
+    branches: [main]
     paths: ["android/**", ".github/workflows/android.yml"]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   apk:
     runs-on: ubuntu-latest
+    env:
+      VERSION_NAME: 0.1.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -13,10 +20,40 @@ jobs:
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.9" }
-      - name: Build debug APK
+      - name: Signing key (repository secret; falls back to a throwaway debug key)
+        id: key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            echo "VOICEFLOCK_KEYSTORE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+            echo "VOICEFLOCK_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "VOICEFLOCK_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "VOICEFLOCK_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "signed=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=debug-key" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build release APKs
         working-directory: android
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleRelease --no-daemon -PversionCode=${{ github.run_number }} -PversionName=${{ env.VERSION_NAME }}
+      - name: Rename APKs
+        run: |
+          cd android/app/build/outputs/apk/release
+          for f in *.apk; do mv "$f" "VoiceFlock-${VERSION_NAME}-$(echo "$f" | sed -E 's/app-(.*)-release.*/\1/').apk"; done
+          ls -la
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceFlock-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: VoiceFlock-apks
+          path: android/app/build/outputs/apk/release/*.apk
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v${{ env.VERSION_NAME }}
+          name: VoiceFlock Android ${{ env.VERSION_NAME }}
+          body: |
+            Phone app build from `${{ github.sha }}`. Signing: ${{ steps.key.outputs.signed }}.
+            `universal` works on any phone; `arm64-v8a` is the small one for modern phones.
+            ${{ steps.key.outputs.signed == 'debug-key' && 'Note: no signing secret is set, so this build uses a throwaway key; installing it over a previous build needs an uninstall first. Add the ANDROID_KEYSTORE_* repository secrets to fix that.' || '' }}
+          files: android/app/build/outputs/apk/release/*.apk
