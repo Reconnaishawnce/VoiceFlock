@@ -553,7 +553,9 @@ async function renderPhone() {
   try {
     const h = await api("/api/health");
     const url = location.origin;
-    $("#phone-info").textContent = `Address to enter in the app:  ${url}\n(from your phone use the laptop's LAN IP or Tailscale name instead of localhost)\nPassword: ${h.password_required ? "the one in .env" : "none set"}`;
+    const port = location.port || (location.protocol === "https:" ? 443 : 80);
+    const addrs = (h.lan_ips || []).map((ip) => `http://${ip}:${port}`);
+    $("#phone-info").textContent = `Address to enter in the app (phone on the same Wi-Fi):\n  ${addrs.join("\n  ") || url}\nPassword: ${h.password_required ? "the one in .env" : "none set"}\nIf the phone can't connect but this page works on the laptop, run allow-firewall.bat once (Windows Firewall), or use Tailscale.`;
     const r = await fetch("/api/mobile/model.onnx", { method: "HEAD" });
     const ms = $("#model-status");
     if (r.status === 200) { const mb = Math.round((Number(r.headers.get("content-length")) || 0) / 1048576); ms.textContent = `phone model ready (${mb} MB)`; }

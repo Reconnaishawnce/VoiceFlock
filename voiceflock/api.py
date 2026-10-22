@@ -97,6 +97,26 @@ def get_conn():
         conn.close()
 
 
+def lan_ips() -> list[str]:
+    """Addresses other devices on the network can use to reach this machine."""
+    import socket
+    ips: list[str] = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except OSError:
+        pass
+    return ips
+
+
 def gpu_info() -> dict:
     """What Windows/driver sees (nvidia-smi) vs what PyTorch can use."""
     info: dict[str, Any] = {"nvidia_driver_gpu": None, "torch_cuda": False, "torch_device_name": None, "mps": False}
@@ -302,6 +322,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         info["gpu"] = gpu_info()
         info["workers"] = workers if run_worker else 0
         info["password_required"] = bool(password)
+        info["lan_ips"] = lan_ips()
         info["queue"] = db.row(conn, "SELECT SUM(status='queued') AS queued, SUM(status='running') AS running,"
                                      " SUM(status='failed') AS failed, SUM(status='done') AS done FROM jobs")
         return info
