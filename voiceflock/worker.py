@@ -142,8 +142,13 @@ def worker_loop(stop: threading.Event | None = None, poll_s: float = 1.5, name: 
         log.info("job %s end", job["id"])
 
 
-def start_background_worker() -> tuple[threading.Thread, threading.Event]:
+def start_background_worker(n: int = 1) -> tuple[list[threading.Thread], threading.Event]:
+    """Start n worker threads sharing one stop event. Only the first polls feeds."""
     stop = threading.Event()
-    t = threading.Thread(target=worker_loop, args=(stop,), name="voiceflock-worker", daemon=True)
-    t.start()
-    return t, stop
+    threads = []
+    for i in range(max(1, n)):
+        t = threading.Thread(target=worker_loop, args=(stop,), kwargs={"poll_feeds": i == 0, "name": f"worker-{i+1}"},
+                             name=f"voiceflock-worker-{i+1}", daemon=True)
+        t.start()
+        threads.append(t)
+    return threads, stop

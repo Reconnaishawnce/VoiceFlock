@@ -3,7 +3,7 @@ services:
   voiceflock:
     build:
       args:
-        TORCH_INDEX: https://download.pytorch.org/whl/cu121
+        TORCH_INDEX: https://download.pytorch.org/whl/cu126
     environment:
       - VOICEFLOCK_DEVICE=cuda
     deploy:

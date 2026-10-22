@@ -41,9 +41,11 @@ async function loadStats() {
     $("#stats").innerHTML = `<span><b>${s.persons_named}</b> people</span><span><b>${s.persons_unknown}</b> unnamed voices</span>
       <span><b>${s.prints}</b> prints</span><span><b>${fmtT(s.sources.seconds)}</b> audio</span>
       <span>queue: <b>${q.running || 0}</b> running, <b>${q.queued || 0}</b> waiting</span>
-      <span>scoring: <b>${s.score_mode}</b>${s.calibrated ? " (calibrated)" : " (default calibration)"}</span><span>device: <b>${h.device || "?"}</b></span>`;
+      <span>scoring: <b>${s.score_mode}</b>${s.calibrated ? " (calibrated)" : " (default calibration)"}</span><span>device: <b>${h.device || "?"}</b>${h.gpu && h.gpu.torch_device_name ? " (" + esc(h.gpu.torch_device_name) + ")" : ""}${h.workers > 1 ? " × " + h.workers + " workers" : ""}</span>`;
     const b = $("#banner");
-    if (!h.hf_token_set) { b.innerHTML = `No HuggingFace token set: diarization will fail. Add it under <a href="#settings" onclick="showTab('settings')">Settings</a> after accepting the model terms on huggingface.co.`; b.classList.remove("hidden"); }
+    const g = h.gpu || {};
+    if (g.nvidia_driver_gpu && !g.torch_cuda) { b.innerHTML = `NVIDIA GPU found (${esc(g.nvidia_driver_gpu)}) but VoiceFlock is running on the CPU, which is 10-30× slower. Close VoiceFlock and run <code>gpu.bat</code> (Mac/Linux: reinstall torch from the cu126 index), then restart.`; b.classList.remove("hidden"); }
+    else if (!h.hf_token_set) { b.innerHTML = `No HuggingFace token set: diarization will fail. Add it under <a href="#settings" onclick="showTab('settings')">Settings</a> after accepting the model terms on huggingface.co.`; b.classList.remove("hidden"); }
     else if (!h.ffmpeg) { b.textContent = "ffmpeg not found on PATH. Install it to process audio."; b.classList.remove("hidden"); }
     else if (!h.torch) { b.textContent = "PyTorch not importable: " + (h.torch_error || ""); b.classList.remove("hidden"); }
     else b.classList.add("hidden");
@@ -181,8 +183,8 @@ function speakerCard(sp, src, idx = 0) {
     ${qualityWarning(sp)}
     ${candidateTable(sp, src)}
     <div class="actions">
-      <input placeholder="Name this voice…" list="person-names" id="nm-${sp.id}" style="max-width:240px">
-      <button class="small" onclick="nameSpeaker(${sp.id})">Name</button>
+      <input placeholder="${sp.person ? "Rename / reassign…" : "Not in the database: add as…"}" list="person-names" id="nm-${sp.id}" style="max-width:260px">
+      <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id})">${sp.person ? "Name" : "Add to database"}</button>
       ${sp.person_id ? `<button class="small" onclick="unassign(${sp.id})">Unassign / undo</button>` : ""}
     </div></div>`;
 }
@@ -297,9 +299,22 @@ async function loadBuild() {
       <div class="inline"><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div>
     </div>`).join("") + `</div>` : `<p class="muted">No unnamed voices yet. Scan some recordings.</p>`;
     renderPeople(named);
+    loadMergeSuggestions();
     if (STATE.personDetail) loadPersonDetail(STATE.personDetail); else $("#person-detail").classList.add("hidden");
   } catch (e) { onErr(e); }
 }
+async function loadMergeSuggestions() {
+  try {
+    const j = await api("/api/voices/merge_suggestions");
+    const el = $("#merge-suggestions");
+    if (!j.pairs.length) { el.innerHTML = ""; return; }
+    el.innerHTML = `<h2>Probably the same person <span class="muted">(${j.pairs.length})</span></h2><p class="muted">Different mics or rooms can split one person into several entries. Listen to both, then merge.</p>` +
+      j.pairs.slice(0, 20).map((p) => `<div class="item"><div class="title"><a class="link" onclick="openPerson(${p.a.id})">${esc(p.a.name)}</a><span class="pill ${p.a.kind}">${p.a.kind === "named" ? "known" : "unnamed"}</span> ≈ <a class="link" onclick="openPerson(${p.b.id})">${esc(p.b.name)}</a><span class="pill ${p.b.kind}">${p.b.kind === "named" ? "known" : "unnamed"}</span> <span class="prob hi">${pct(p.probability)}</span></div>
+        <div class="row" style="margin:4px 0 0">${[p.a, p.b].map((x) => `<div class="col">${x.heard_in[0]?.clip_url ? `<audio controls preload="none" src="${x.heard_in[0].clip_url}"></audio>` : '<span class="muted">no clip</span>'}</div>`).join("")}</div>
+        <div class="actions"><button class="small primary" onclick="mergeInto(${p.a.kind === "named" ? p.b.id : p.a.id}, ${p.a.kind === "named" ? p.a.id : p.b.id})">Merge into ${esc(p.a.kind === "named" ? p.a.name : p.b.name)}</button>${p.a.kind !== "named" && p.b.kind !== "named" ? ` <button class="small" onclick="mergeInto(${p.b.id}, ${p.a.id})">Merge into ${esc(p.a.name)}</button>` : ""}</div></div>`).join("");
+  } catch (e) { onErr(e); }
+}
+async function mergeInto(fromId, intoId) { try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); loadBuild(); loadStats(); } catch (e) { onErr(e); } }
 function renderPeople(list) {
   const q = ($("#person-search").value || "").toLowerCase();
   $("#people").innerHTML = list.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item"><a class="link" onclick="openPerson(${p.id})">${esc(p.name)}</a>
@@ -320,6 +335,29 @@ async function loadPersonDetail(id) {
       <h3>Recent matches</h3>${p.matches.slice(0, 20).map((m) => `<div class="item"><a class="link" onclick="openSource(${m.source_id})">${esc(m.source_name)}</a> / ${esc(m.label)} · <span class="prob">${pct(m.probability)}</span> <span class="pill">${m.status}</span></div>`).join("") || '<p class="muted">none</p>'}`;
   } catch (e) { onErr(e); }
 }
+
+/* ---------------- microphone recording ---------------- */
+let REC = null;
+$("#btn-rec").onclick = async () => {
+  const btn = $("#btn-rec"), st = $("#rec-status");
+  if (REC) { REC.stop(); return; }
+  if (!navigator.mediaDevices?.getUserMedia) { st.textContent = "Recording needs HTTPS or localhost (browser rule). Use the laptop itself, or Tailscale HTTPS."; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+    const chunks = []; const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const t0 = Date.now(); const tick = setInterval(() => { st.textContent = `recording ${fmtT((Date.now() - t0) / 1000)}… click again to stop`; }, 500);
+    rec.ondataavailable = (e) => chunks.push(e.data);
+    rec.onstop = () => {
+      clearInterval(tick); stream.getTracks().forEach((t) => t.stop()); REC = null; btn.textContent = "🎙 Record from microphone";
+      const ext = (rec.mimeType || "").includes("mp4") ? "m4a" : (rec.mimeType || "").includes("ogg") ? "ogg" : "webm";
+      const f = new File(chunks, `recording ${new Date().toISOString().slice(0, 16).replace("T", " ")}.${ext}`, { type: rec.mimeType || "audio/webm" });
+      st.textContent = `recorded ${fmtT((Date.now() - t0) / 1000)}, uploading`;
+      uploadFiles([f], "match", "#upl-match", { incognito: () => $("#inc-match").checked });
+    };
+    rec.start(1000); REC = rec; btn.textContent = "⏹ Stop recording";
+  } catch (e) { st.textContent = "microphone blocked: " + e.message; }
+};
 
 /* ---------------- match ---------------- */
 async function loadMatch() {

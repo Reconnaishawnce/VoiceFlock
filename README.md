@@ -66,6 +66,14 @@ NVIDIA GPU: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -
 
 No Developer Mode / symlink permission is needed: on Windows the models are copied instead of linked.
 
+**GPU.** If the laptop has an NVIDIA GPU, setup installs the CUDA build of PyTorch and the header shows the
+GPU name next to "device". Diarization is then 10-30× faster than CPU (a 1 h meeting in about a minute).
+If the header says `cpu` but you have an NVIDIA card, update the NVIDIA driver (any 2024+ GeForce/Studio
+driver), close VoiceFlock and run `gpu.bat`. The UI shows a banner when it detects this situation.
+
+**Parallel jobs.** `VOICEFLOCK_WORKERS=2` (or `voiceflock serve --workers 2`) processes two recordings at
+once. Leave it at 1 with a GPU or a laptop CPU; 2-3 helps on a big CPU-only desktop.
+
 ### 2c. Run natively on macOS / Linux
 
 ```bash
@@ -105,6 +113,13 @@ trigger it with **Sources → Re-match all** or `voiceflock rematch`.
 
 **Duplicates.** Re-uploading a file you already processed (same bytes, any filename) or the same URL is
 detected and points you at the existing recording instead of processing it twice.
+
+**Merge suggestions.** Incremental clustering can split one person across several unnamed voices when the
+mic or room changes. Build Database lists pairs that are probably the same person, with both clips, and a
+one-click merge.
+
+**Microphone.** VoiceFlock Match has a Record button (browser rule: works on the laptop itself or over HTTPS,
+e.g. Tailscale; plain http://ip from a phone can't open the mic).
 
 **Timeline.** Each recording shows a colour-coded speaker timeline; click any block or timestamp chip to
 jump the player there, so "check at 12:34" is one click.

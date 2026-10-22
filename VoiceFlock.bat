@@ -10,7 +10,8 @@ if not exist ".venv\Scripts\python.exe" (
 rem load .env into this process
 if exist ".env" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do if not "%%b"=="" set "%%a=%%b"
 if "%VOICEFLOCK_PORT%"=="" set VOICEFLOCK_PORT=8787
+if "%VOICEFLOCK_WORKERS%"=="" set VOICEFLOCK_WORKERS=1
 if not "%~1"=="--quiet" start "" /b cmd /c "timeout /t 4 >nul & start "" http://localhost:%VOICEFLOCK_PORT%"
 title VoiceFlock - http://localhost:%VOICEFLOCK_PORT%  (close this window to stop)
-".venv\Scripts\python.exe" -m voiceflock serve --host 0.0.0.0 --port %VOICEFLOCK_PORT%
+".venv\Scripts\python.exe" -m voiceflock serve --host 0.0.0.0 --port %VOICEFLOCK_PORT% --workers %VOICEFLOCK_WORKERS%
 pause

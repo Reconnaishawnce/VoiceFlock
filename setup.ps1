@@ -49,13 +49,17 @@ Invoke-Expression "$pip install --upgrade pip wheel" | Out-Null
 $gpu = (Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match "NVIDIA" })
 if ($gpu) {
     Write-Host "NVIDIA GPU detected ($($gpu.Name)): installing CUDA PyTorch (large download) ..." -ForegroundColor Yellow
-    Invoke-Expression "$pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121"
+    Invoke-Expression "$pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126"
 } else {
     Write-Host "Installing CPU PyTorch ..." -ForegroundColor Yellow
     Invoke-Expression "$pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu"
 }
 Write-Host "Installing VoiceFlock ..." -ForegroundColor Yellow
 Invoke-Expression "$pip install -e ."
+$cuda = & .\.venv\Scripts\python.exe -c "import torch;print('yes' if torch.cuda.is_available() else 'no')"
+if ($gpu -and $cuda -ne "yes") {
+    Write-Host "WARNING: NVIDIA GPU present but PyTorch cannot use it. Update your NVIDIA driver (GeForce/Studio driver, any 2024+ version) and run gpu.bat." -ForegroundColor Red
+} elseif ($cuda -eq "yes") { Write-Host "GPU acceleration: ON" -ForegroundColor Green } else { Write-Host "GPU acceleration: off (no NVIDIA GPU found); CPU mode." }
 
 # --- .env ----------------------------------------------------------------------
 if (-not (Test-Path ".env")) {

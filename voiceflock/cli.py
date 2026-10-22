@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ def _log(verbose: bool):
 def cmd_serve(a):
     import uvicorn
     from .api import create_app
-    app = create_app(run_worker=not a.no_worker)
+    app = create_app(run_worker=not a.no_worker, workers=max(1, a.workers))
     uvicorn.run(app, host=a.host, port=a.port, log_level="info")
 
 
@@ -251,6 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="0.0.0.0")
     s.add_argument("--port", type=int, default=8787)
     s.add_argument("--no-worker", action="store_true", help="don't run a worker in this process")
+    s.add_argument("--workers", type=int, default=int(os.environ.get("VOICEFLOCK_WORKERS", "1")),
+                   help="parallel processing threads in this process (default 1)")
     s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("worker", help="run a job-queue worker process")

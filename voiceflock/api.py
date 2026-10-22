@@ -79,13 +79,36 @@ def get_conn():
         conn.close()
 
 
-def create_app(run_worker: bool = True) -> FastAPI:
+def gpu_info() -> dict:
+    """What Windows/driver sees (nvidia-smi) vs what PyTorch can use."""
+    info: dict[str, Any] = {"nvidia_driver_gpu": None, "torch_cuda": False, "torch_device_name": None, "mps": False}
+    smi = shutil.which("nvidia-smi") or (r"C:\Windows\System32\nvidia-smi.exe" if os.name == "nt" else None)
+    if smi and Path(smi).exists():
+        try:
+            import subprocess
+            r = subprocess.run([smi, "--query-gpu=name,memory.total", "--format=csv,noheader"], capture_output=True, text=True, timeout=10)
+            if r.returncode == 0 and r.stdout.strip():
+                info["nvidia_driver_gpu"] = r.stdout.strip().splitlines()[0]
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        import torch
+        info["torch_cuda"] = bool(torch.cuda.is_available())
+        if info["torch_cuda"]:
+            info["torch_device_name"] = torch.cuda.get_device_name(0)
+        info["mps"] = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    except Exception:  # noqa: BLE001
+        pass
+    return info
+
+
+def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         db.init_db()
         stop = None
         if run_worker:
-            _, stop = worker.start_background_worker()
+            _, stop = worker.start_background_worker(workers)
         yield
         if stop:
             stop.set()
@@ -244,6 +267,8 @@ def create_app(run_worker: bool = True) -> FastAPI:
             info["torch"] = None
             info["torch_error"] = str(e)
         info["hf_token_set"] = bool(config.Settings(conn)["hf_token"])
+        info["gpu"] = gpu_info()
+        info["workers"] = workers if run_worker else 0
         info["queue"] = db.row(conn, "SELECT SUM(status='queued') AS queued, SUM(status='running') AS running,"
                                      " SUM(status='failed') AS failed, SUM(status='done') AS done FROM jobs")
         return info
@@ -600,6 +625,38 @@ def create_app(run_worker: bool = True) -> FastAPI:
         for p in ps:
             p["heard_in"] = person_sources(conn, p["id"], limit=10)
         return {"voices": ps}
+
+    @app.get("/api/voices/merge_suggestions")
+    def merge_suggestions(limit: int = 50, conn=Depends(get_conn)):
+        """Pairs of voices that are probably the same person (incremental clustering can split one person
+        across several unnamed voices when the mic or room changes)."""
+        import numpy as np
+        g = app.state.gcache.get(conn)
+        settings = config.Settings(conn)
+        thr = float(settings["unknown_cluster_threshold"])
+        if len(g) == 0:
+            return {"pairs": []}
+        means: dict[int, list] = {}
+        for i, pid in enumerate(g.person_ids):
+            means.setdefault(int(pid), []).append(g.emb[i])
+        pids = [p for p in means if p in g.persons]
+        M = gallery.l2n(np.stack([np.mean(np.stack(means[p]), axis=0) for p in pids]))
+        pairs = []
+        for a in range(len(pids)):
+            for b in range(a + 1, len(pids)):
+                ka, kb = g.persons[pids[a]]["kind"], g.persons[pids[b]]["kind"]
+                if ka == "named" and kb == "named":
+                    continue  # two known people are never auto-suggested
+                raw, norm, prob = g.score_pair(M[a], M[b])
+                if prob >= thr:
+                    pairs.append({"a": {"id": pids[a], "name": g.persons[pids[a]]["name"], "kind": ka},
+                                  "b": {"id": pids[b], "name": g.persons[pids[b]]["name"], "kind": kb},
+                                  "probability": prob, "raw_score": raw})
+        pairs.sort(key=lambda x: -x["probability"])
+        for pr in pairs[:limit]:
+            for side in ("a", "b"):
+                pr[side]["heard_in"] = person_sources(conn, pr[side]["id"], limit=3)
+        return {"pairs": pairs[:limit], "threshold": thr}
 
     # ---------------------------------------------------------------- speakers / matches
 

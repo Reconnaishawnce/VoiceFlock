@@ -75,6 +75,7 @@
         <div id="people"></div>
       </div>
       <div class="card col">
+        <div id="merge-suggestions"></div>
         <h2>Unnamed voices <span class="muted" id="unnamed-count"></span></h2>
         <p class="muted">Listen, then name the voice. Typing an existing name merges into that person. Use <b>Merge</b> when two unnamed voices are the same person.</p>
         <div id="unnamed"></div>
@@ -90,6 +91,7 @@
         <h2>VoiceFlock Match</h2>
         <p class="muted">Upload a recording and see who it sounds like: top candidates with calibrated probability, margin over #2 and clip quality.</p>
         <div class="dropzone" id="drop-match">Drop a file or <label class="link">browse<input type="file" multiple hidden id="file-match"></label></div>
+        <div class="actions"><button id="btn-rec">🎙 Record from microphone</button> <span id="rec-status" class="muted"></span></div>
         <div class="urlrow"><input id="url-match" placeholder="or a URL"><button id="btn-url-match">Queue</button></div>
         <label class="chk"><input type="checkbox" id="inc-match"> Incognito (don't save voices from this file)</label>
         <div id="upl-match" class="uploads"></div>

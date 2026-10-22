@@ -7,7 +7,7 @@ PY=$(command -v python3.12 || command -v python3.11 || command -v python3.10 || 
 [ -d .venv ] || "$PY" -m venv .venv
 . .venv/bin/activate
 pip install --upgrade pip wheel >/dev/null
-if command -v nvidia-smi >/dev/null 2>&1; then pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+if command -v nvidia-smi >/dev/null 2>&1; then pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
 else pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu; fi
 pip install -e .
 [ -f .env ] || { cp .env.example .env; echo "Edit .env and set HF_TOKEN (and VOICEFLOCK_PASSWORD)."; }
