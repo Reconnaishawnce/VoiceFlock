@@ -6,7 +6,7 @@ const fmtT = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(
 const pct = (p) => (p * 100).toFixed(1) + "%";
 const probCls = (p, thr, hi) => p >= hi ? "hi" : p >= thr ? "mid" : "lo";
 let SETTINGS = {}, SPECS = {}, STATE = { tab: "bulk", matchSource: null, sourceDetail: null, personDetail: null };
-const COLORS = ["#5ad1a8", "#3f8cff", "#f2b84b", "#ef6b6b", "#b07cff", "#4fd1e0", "#ff9f5a", "#9ad15a", "#ff6fb5", "#c9c9c9"];
+const COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]; // validated dark-surface categorical set
 const elapsed = (iso) => { if (!iso) return ""; const s = Math.max(0, (Date.now() - Date.parse(iso + (iso.endsWith("Z") ? "" : "Z"))) / 1000); return fmtT(s); };
 
 async function api(path, opts = {}) {
@@ -29,7 +29,7 @@ function showTab(name) {
 }
 window.addEventListener("hashchange", () => { const t = location.hash.replace("#", ""); if (t && t !== STATE.tab && $(`#tab-${t}`)) showTab(t); });
 function refreshTab() {
-  ({ bulk: () => { loadAlerts(); loadFeeds(); }, build: loadBuild, match: loadMatch, sources: loadSources, settings: loadSettings })[STATE.tab]?.();
+  ({ overview: loadOverview, bulk: () => { loadAlerts(); loadFeeds(); }, build: loadBuild, match: loadMatch, live: () => {}, sources: loadSources, settings: loadSettings })[STATE.tab]?.();
 }
 
 /* ---------------- header ---------------- */
@@ -112,7 +112,7 @@ async function updateUploadRows() {
   const bySrc = {}; j.jobs.forEach((x) => { if (!bySrc[x.source_id]) bySrc[x.source_id] = x; });
   rows.forEach((r) => { const x = bySrc[r.dataset.source]; if (!x) return; const st = r.querySelector(".st");
     if (x.status === "running") { st.textContent = `${x.stage || "running"} ${Math.round(x.progress)}%`; r.querySelector("i").style.width = x.progress + "%"; }
-    else if (x.status === "done") { st.innerHTML = `done · <a class="link" onclick="openSource(${x.source_id})">view</a>`; }
+    else if (x.status === "done") { st.innerHTML = `done · <a class="link" onclick="openSource(${x.source_id})">view</a>${x.enroll_person_id ? ` · <a class="link" onclick="openPerson(${x.enroll_person_id})">open person (library re-checked)</a>` : ""}`; }
     else st.textContent = x.status + (x.error ? ": " + x.error : "");
   });
 }
@@ -232,6 +232,7 @@ async function mergePerson(id) {
   try { await api(`/api/persons/${id}/merge`, { method: "POST", body: { into_id: Number(into) } }); toast("Merged"); loadBuild(); loadStats(); } catch (e) { onErr(e); }
 }
 async function deletePerson(id) { if (!confirm("Delete this voice and all its prints?")) return; try { await api(`/api/persons/${id}`, { method: "DELETE" }); toast("Deleted"); STATE.personDetail = null; loadBuild(); loadStats(); loadNames(); } catch (e) { onErr(e); } }
+async function acceptPerson(id) { try { const p = await api(`/api/persons/${id}/accept`, { method: "POST" }); toast(`Kept as ${p.name}; it will now raise alerts`); loadBuild(); loadStats(); loadNames(); } catch (e) { onErr(e); } }
 async function renamePerson(id) { const name = prompt("New name?"); if (!name) return; try { await api(`/api/persons/${id}`, { method: "PATCH", body: { name } }); loadBuild(); loadNames(); } catch (e) { onErr(e); } }
 async function loadNames() {
   const j = await api("/api/persons?kind=named").catch(() => ({ persons: [] }));
@@ -259,6 +260,112 @@ async function loadAlerts() {
       ${r.heard_in[0]?.clip_url ? `<audio controls preload="none" src="${r.heard_in[0].clip_url}"></audio>` : ""}
       <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}"><button class="small" onclick="namePerson(${r.person_id})">Name</button></div></div>`).join("") : `<p class="muted">No unnamed voice has shown up in two or more recordings yet.</p>`;
   } catch (e) { onErr(e); }
+}
+
+/* ---------------- glyphs & overview ---------------- */
+function glyphSvg(g, color = "var(--s1)", size = 28) {
+  if (!g) return `<span class="glyph"></span>`;
+  const n = g.length, r0 = 5, r1 = 13, cx = 14, cy = 14;
+  const bars = g.map((v, i) => { const a = (i / n) * Math.PI * 2, r = r0 + v * (r1 - r0); return `<line x1="${cx + Math.cos(a) * r0}" y1="${cy + Math.sin(a) * r0}" x2="${cx + Math.cos(a) * r}" y2="${cy + Math.sin(a) * r}" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>`; }).join("");
+  return `<svg class="glyph" width="${size}" height="${size}" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="13" fill="var(--panel2)"/>${bars}</svg>`;
+}
+let OV = null;
+async function loadOverview() {
+  try {
+    const o = await api("/api/overview"); OV = o;
+    const t = o.stats;
+    $("#ov-tiles").innerHTML = [[t.hours.toFixed(1), "hours of recordings"], [t.recordings, "recordings"], [t.known, "known people"], [t.unknown, "unnamed voices"], [t.speech_hours.toFixed(1), "hours of attributed speech"], [t.open_alerts, "alerts to review"]]
+      .map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+    const maxS = Math.max(1, ...o.top_voices.map((v) => v.speech_seconds));
+    $("#ov-top").innerHTML = o.top_voices.map((v) => `<div class="hbar"><a onclick="openPerson(${v.id})" style="cursor:pointer">${glyphSvg(v.glyph, v.kind === "named" ? "var(--s1)" : "var(--s3)")}</a>
+      <div><div class="nm"><a class="link" onclick="openPerson(${v.id})">${esc(v.name)}</a><span>${fmtT(v.speech_seconds)} · ${v.n_sources} rec</span></div><div class="bar"><i style="width:${(v.speech_seconds / maxS) * 100}%"></i></div></div></div>`).join("") || '<p class="muted">Nothing processed yet.</p>';
+    const act = o.activity; const maxA = Math.max(1, ...act.map((a) => a.hours));
+    $("#ov-activity").innerHTML = act.length ? `<div class="cols">${act.map((a) => `<div class="c" style="height:${Math.max(2, (a.hours / maxA) * 100)}%" data-tip="${esc(a.day)}: ${a.recordings} rec · ${a.hours.toFixed(1)} h"></div>`).join("")}</div><div class="xlab"><span>${esc(act[0].day)}</span><span>hours of audio added per day</span><span>${esc(act[act.length - 1].day)}</span></div>` : '<p class="muted">No recordings yet.</p>';
+    $("#ov-pairs").innerHTML = o.pairs.map((p) => `<div class="item"><a class="link" onclick="openPerson(${p.a_id})">${esc(p.a_name)}</a> + <a class="link" onclick="openPerson(${p.b_id})">${esc(p.b_name)}</a> <span class="muted">· ${p.n} recording${p.n > 1 ? "s" : ""}</span></div>`).join("") || '<p class="muted">Needs recordings with two or more identified voices.</p>';
+    drawMap(o.voices);
+  } catch (e) { onErr(e); }
+}
+function drawMap(voices) {
+  const cv = $("#ov-map"); const dpr = window.devicePixelRatio || 1; const W = cv.clientWidth || 600, H = 420;
+  cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, W, H);
+  if (!voices.length) { ctx.fillStyle = "#8a94a3"; ctx.font = "13px system-ui"; ctx.fillText("The map fills in as voices are added.", 16, 28); return; }
+  const pad = 28, maxS = Math.max(1, ...voices.map((v) => v.speech_seconds));
+  const pts = voices.map((v) => ({ v, x: pad + ((v.x + 1) / 2) * (W - 2 * pad), y: pad + ((1 - v.y) / 2) * (H - 2 * pad), r: 4 + Math.sqrt(v.speech_seconds / maxS) * 14 }));
+  cv._pts = pts;
+  for (const p of pts) { ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fillStyle = p.v.kind === "named" ? "#3987e5" : "#199e70"; ctx.globalAlpha = 0.85; ctx.fill(); ctx.globalAlpha = 1; ctx.lineWidth = 2; ctx.strokeStyle = "#171b21"; ctx.stroke(); }
+  ctx.fillStyle = "#e8ecf1"; ctx.font = "12px system-ui";
+  for (const p of pts.filter((p) => p.v.kind === "named").sort((a, b) => b.r - a.r).slice(0, 12)) ctx.fillText(p.v.name, p.x + p.r + 4, p.y + 4);
+}
+$("#ov-map").addEventListener("mousemove", (e) => {
+  const cv = e.target, pts = cv._pts || [], r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const hit = pts.find((p) => Math.hypot(p.x - x, p.y - y) <= p.r + 4); const tip = $("#ov-tip");
+  if (!hit) { tip.classList.add("hidden"); cv._hit = null; return; }
+  cv._hit = hit; tip.classList.remove("hidden"); tip.style.left = hit.x + 12 + "px"; tip.style.top = hit.y - 10 + "px";
+  tip.innerHTML = `<b>${esc(hit.v.name)}</b> <span class="muted">${hit.v.kind === "named" ? "known" : "unnamed"}</span><br>${fmtT(hit.v.speech_seconds)} of speech · ${hit.v.n_sources} recordings`;
+});
+$("#ov-map").addEventListener("mouseleave", () => $("#ov-tip").classList.add("hidden"));
+$("#ov-map").addEventListener("click", (e) => { const h = e.target._hit; if (h) openPerson(h.v.id); });
+window.addEventListener("resize", () => { if (STATE.tab === "overview" && OV) drawMap(OV.voices); });
+
+/* ---------------- live listen ---------------- */
+let LIVE = null;
+function beep() { try { const ac = new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.18); } catch (e) {} }
+$("#btn-live").onclick = async () => {
+  if (LIVE) { stopLive(); return; }
+  const st = $("#live-status");
+  if (!navigator.mediaDevices?.getUserMedia) { st.textContent = "Microphone needs localhost or HTTPS."; return; }
+  if ($("#live-notify").checked && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+    const ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const src = ac.createMediaStreamSource(stream);
+    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/live");
+    ws.binaryType = "arraybuffer";
+    const ratio = ac.sampleRate / 16000; // browsers may ignore the requested rate; downsample if so
+    const proc = ac.createScriptProcessor(4096, 1, 1);
+    proc.onaudioprocess = (e) => {
+      if (ws.readyState !== 1) return;
+      const inp = e.inputBuffer.getChannelData(0); const n = Math.floor(inp.length / ratio); const out = new Int16Array(n);
+      let peak = 0;
+      for (let i = 0; i < n; i++) { const v = Math.max(-1, Math.min(1, inp[Math.floor(i * ratio)])); out[i] = v * 32767; peak = Math.max(peak, Math.abs(v)); }
+      $("#live-level").style.width = Math.min(100, peak * 140) + "%";
+      ws.send(out.buffer);
+    };
+    src.connect(proc); proc.connect(ac.destination);
+    LIVE = { stream, ac, proc, ws, lastAlert: 0, log: [] };
+    $("#btn-live").textContent = "⏹ Stop listening"; st.textContent = "connecting…";
+    ws.onmessage = (ev) => {
+      const m = JSON.parse(ev.data);
+      if (m.type === "status") { st.textContent = m.text; return; }
+      if (m.type === "error") { st.textContent = m.text; stopLive(); return; }
+      renderLive(m);
+    };
+    ws.onclose = () => { if (LIVE) { st.textContent = "connection closed"; stopLive(); } };
+  } catch (e) { st.textContent = "microphone blocked: " + e.message; }
+};
+function stopLive() {
+  if (!LIVE) return;
+  try { LIVE.proc.disconnect(); LIVE.ac.close(); LIVE.stream.getTracks().forEach((t) => t.stop()); LIVE.ws.close(); } catch (e) {}
+  LIVE = null; $("#btn-live").textContent = "▶ Start listening"; $("#live-level").style.width = "0"; $("#live-now").className = "livenow"; $("#live-now").innerHTML = '<div class="muted">Not listening.</div>';
+}
+function renderLive(m) {
+  const now = $("#live-now"); const thr = Number(SETTINGS.match_threshold || 0.75);
+  if (!m.speech) { now.className = "livenow"; now.innerHTML = `<div class="muted">silence · ${m.level_db} dBFS</div>`; return; }
+  const top = m.candidates[0];
+  if (!top) { now.innerHTML = `<div class="who muted">speech, empty gallery</div>`; return; }
+  const known = top.kind === "named";
+  now.className = "livenow" + (m.alert ? " alert" : "");
+  now.innerHTML = `<div class="muted">${m.alert ? "KNOWN VOICE" : top.probability >= thr ? "unnamed voice from the library" : "no confident match"}</div>
+    <div class="who" style="${m.alert ? "" : "opacity:.7"}">${esc(top.name)} <span class="prob ${probCls(top.probability, thr, SETTINGS.confirm_threshold || 0.9)}" style="font-size:18px">${pct(top.probability)}</span></div>
+    <div class="meter"><i style="width:${pct(top.probability)}"></i></div>
+    <div class="others">${m.candidates.slice(1).map((c) => `${esc(c.name)} ${pct(c.probability)}`).join(" · ") || ""}</div>`;
+  if (m.alert && Date.now() - LIVE.lastAlert > 8000) {
+    LIVE.lastAlert = Date.now();
+    if ($("#live-beep").checked) beep();
+    if ($("#live-notify").checked && "Notification" in window && Notification.permission === "granted") new Notification("VoiceFlock", { body: `${top.name} (${pct(top.probability)})` });
+    LIVE.log.unshift(`${new Date().toLocaleTimeString()} — ${top.name} ${pct(top.probability)}${known ? "" : " (unnamed)"}`);
+    $("#live-log").innerHTML = LIVE.log.slice(0, 50).map((l) => `<div class="item">${esc(l)}</div>`).join("");
+  }
 }
 
 /* ---------------- feeds ---------------- */
@@ -296,7 +403,7 @@ async function loadBuild() {
       <div class="nm">${esc(v.name)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
       ${v.heard_in.slice(0, 3).map((h) => `<div class="sub"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}</div>${h.clip_url ? `<audio controls preload="none" src="${h.clip_url}"></audio>` : ""}`).join("")}
       <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
-      <div class="inline"><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div>
+      <div class="inline"><button class="small" onclick="acceptPerson(${v.id})" title="Track this voice as a known voice without naming it">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div>
     </div>`).join("") + `</div>` : `<p class="muted">No unnamed voices yet. Scan some recordings.</p>`;
     renderPeople(named);
     loadMergeSuggestions();
@@ -317,15 +424,15 @@ async function loadMergeSuggestions() {
 async function mergeInto(fromId, intoId) { try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); loadBuild(); loadStats(); } catch (e) { onErr(e); } }
 function renderPeople(list) {
   const q = ($("#person-search").value || "").toLowerCase();
-  $("#people").innerHTML = list.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item"><a class="link" onclick="openPerson(${p.id})">${esc(p.name)}</a>
-    <span class="muted">· ${p.n_prints} prints · ${p.n_sources} rec · ${fmtT(p.speech_seconds)}</span></div>`).join("") || `<p class="muted">No people yet.</p>`;
+  $("#people").innerHTML = list.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item" style="display:flex;gap:8px;align-items:center">${glyphSvg(p.glyph)}<div><a class="link" onclick="openPerson(${p.id})">${esc(p.name)}</a>
+    <div class="muted" style="font-size:12px">${p.n_prints} prints · ${p.n_sources} rec · ${fmtT(p.speech_seconds)}</div></div></div>`).join("") || `<p class="muted">No people yet.</p>`;
 }
 $("#person-search").addEventListener("input", () => loadNames().then(renderPeople));
 async function loadPersonDetail(id) {
   try {
     const p = await api(`/api/persons/${id}`);
     const el = $("#person-detail"); el.classList.remove("hidden");
-    el.innerHTML = `<div class="hdr"><h2>${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span></h2>
+    el.innerHTML = `<div class="hdr"><h2 style="display:flex;align-items:center;gap:10px">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 36)} ${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span></h2>
       <div class="actions"><button class="small" onclick="renamePerson(${p.id})">Rename</button><button class="small danger" onclick="deletePerson(${p.id})">Delete</button><button class="small" onclick="STATE.personDetail=null;loadBuild()">Close</button></div></div>
       <div class="sub">${p.n_prints} prints from ${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech ${p.notes ? "· " + esc(p.notes) : ""}</div>
       <h3>Heard in</h3>${p.heard_in.map((h) => `<div class="item"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)} <span class="pill">${esc(h.assignment)}</span>
@@ -377,7 +484,7 @@ async function loadSources() {
     const [j, q] = await Promise.all([api(`/api/sources?limit=200&q=${qs}`), api("/api/jobs?limit=50")]);
     const jobLabel = (x) => x.type === "process_source" ? `<a class="link" onclick="openSource(${x.source_id})">${esc(x.source_name || "#" + x.source_id)}</a>` : `<b>${esc(x.type)}</b>${x.source_id ? " #" + x.source_id : ""}`;
     $("#jobs").innerHTML = q.jobs.filter((x) => x.status !== "cancelled").slice(0, 30).map((x) => `<div class="item"><span class="pill ${x.status}">${x.status}</span> ${jobLabel(x)}
-      <div class="sub">${x.status === "running" ? `${esc(x.stage || "")} ${Math.round(x.progress)}% · ${elapsed(x.started_at)} elapsed · last update ${elapsed(x.heartbeat_at) || "-"} ago <button class="small" onclick="cancelJob(${x.id})">stop</button><div class="bar"><i style="width:${x.progress}%"></i></div>${x.log ? `<pre class="muted" style="margin:4px 0;font-size:11px;white-space:pre-wrap">${esc(x.log.split("\n").slice(-4).join("\n"))}</pre>` : ""}` : x.status === "failed" ? `<span class="warnbox">${esc(x.error)}</span> ${x.type === "process_source" ? `<button class="small" onclick="retryJob(${x.id})">retry</button>` : ""}${x.log ? ` <details><summary class="muted" style="cursor:pointer">details</summary><pre class="muted" style="font-size:11px;white-space:pre-wrap">${esc(x.log.slice(-1500))}</pre></details>` : ""}` : x.status === "queued" ? `<button class="small" onclick="cancelJob(${x.id})">cancel</button>` : `${esc((x.finished_at || "").slice(0, 16).replace("T", " "))}${x.type === "rematch" && x.result ? " · " + esc(x.result) : ""}`}</div></div>`).join("") || '<p class="muted">Queue is empty.</p>';
+      <div class="sub">${x.status === "running" ? `${esc(x.stage || "")} ${Math.round(x.progress)}% · ${elapsed(x.started_at)} elapsed · last update ${elapsed(x.heartbeat_at) || "-"} ago <button class="small" onclick="cancelJob(${x.id})">stop</button><div class="bar"><i style="width:${x.progress}%"></i></div>${x.log ? `<pre class="muted" style="margin:4px 0;font-size:11px;white-space:pre-wrap">${esc(x.log.split("\n").slice(-4).join("\n"))}</pre>` : ""}` : x.status === "failed" ? `<span class="warnbox">${esc(x.error)}</span> ${x.type === "process_source" ? `<button class="small" onclick="retryJob(${x.id})">retry</button>` : ""} <button class="small" onclick="dismissJob(${x.id})">dismiss</button>${x.log ? ` <details><summary class="muted" style="cursor:pointer">details</summary><pre class="muted" style="font-size:11px;white-space:pre-wrap">${esc(x.log.slice(-1500))}</pre></details>` : ""}` : x.status === "queued" ? `<button class="small" onclick="cancelJob(${x.id})">cancel</button>` : `${esc((x.finished_at || "").slice(0, 16).replace("T", " "))}${x.type === "rematch" && x.result ? " · " + esc(x.result) : ""}${x.enroll_person_id ? ` · <a class="link" onclick="openPerson(${x.enroll_person_id})">open person</a>` : ""}`}</div></div>`).join("") || '<p class="muted">Queue is empty.</p>';
     $("#sources").innerHTML = `<table><tr><th>Recording</th><th>Mode</th><th>Status</th><th>Length</th><th>Speakers</th><th></th></tr>` + j.sources.map((s) => `<tr>
       <td><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a>${s.incognito ? '<span class="pill">incognito</span>' : ""}</td><td>${s.mode}</td>
       <td><span class="pill ${s.status}">${s.status}</span>${s.job && s.job.status === "running" ? ` <span class="muted">${Math.round(s.job.progress)}%</span>` : ""}</td>
@@ -388,6 +495,8 @@ async function loadSources() {
     else $("#source-detail").classList.add("hidden");
   } catch (e) { onErr(e); }
 }
+$("#btn-clear-jobs").onclick = async () => { try { const r = await api("/api/jobs/clear", { method: "POST" }); toast(`Cleared ${r.deleted}`); loadSources(); } catch (e) { onErr(e); } };
+async function dismissJob(id) { try { await api(`/api/jobs/${id}`, { method: "DELETE" }); loadSources(); } catch (e) { onErr(e); } }
 $("#source-search").addEventListener("input", () => { clearTimeout(STATE._st); STATE._st = setTimeout(loadSources, 250); });
 $("#btn-rematch").onclick = async () => { try { await api("/api/rematch", { method: "POST", body: {} }); toast("Re-match queued"); loadSources(); } catch (e) { onErr(e); } };
 async function retryJob(id) { try { await api(`/api/jobs/${id}/retry`, { method: "POST" }); loadSources(); } catch (e) { onErr(e); } }
@@ -435,7 +544,7 @@ $("#btn-save-settings").onclick = async (e) => {
   const j = await api("/api/settings").catch(() => ({ values: {}, specs: {} })); SETTINGS = j.values; SPECS = j.specs;
   $("#inc-match").checked = !!SETTINGS.incognito_default; $("#inc-bulk").checked = !!SETTINGS.incognito_default;
   loadNames();
-  showTab(location.hash.replace("#", "") || "bulk");
+  showTab(location.hash.replace("#", "") || "overview");
   loadStats();
   let lastBusy = 0;
   setInterval(async () => {

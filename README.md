@@ -4,12 +4,18 @@ Open-set speaker identification with a web UI. Upload (or link to) audio or vide
 diarizes it, makes a voiceprint of **every** speaker, and matches those prints against a gallery
 you build over time.
 
+The workflow is **background library first, names later**: bulk-import everything, let VoiceFlock file every
+speaker as an unnamed voice, then identify people whenever you like by uploading reference audio or naming
+the voices you recognise. Every identification re-checks the whole library in seconds.
+
 Three ways to use it, plus feed watching so new episodes scan themselves:
 
 | Mode | What it does |
 |---|---|
 | **Bulk Scan** | Drop many files. Every speaker is printed. Known people raise an alert ("we think *X* is in this file at 12:34, check against *that* file"). New voices are saved as *unnamed voices*, so if the same voice shows up in a later upload you're told where it was first heard. |
 | **Build Database** | Listen to the unnamed voices, name them, merge duplicates, or enroll a known person directly from a clip. |
+| **Live** | The laptop microphone, scored against the whole library every second: "who is speaking right now", with a beep or browser notification when a known voice is heard. Nothing is recorded. |
+| **Overview** | Stat tiles, a voice map (every voice placed by similarity, sized by speaking time), most-heard voices, recordings over time, who is heard together. |
 | **VoiceFlock Match** | Upload one recording and get, per speaker, the top 5 candidates with calibrated probability, margin over #2, and a clip-quality score. Confirm / Reject feed the gallery. Incognito mode matches without saving anything. |
 
 **Watched feeds**: add a podcast RSS or YouTube channel feed and new episodes are downloaded and scanned
@@ -114,6 +120,9 @@ trigger it with **Sources → Re-match all** or `voiceflock rematch`.
 **Duplicates.** Re-uploading a file you already processed (same bytes, any filename) or the same URL is
 detected and points you at the existing recording instead of processing it twice.
 
+**Keep.** An unnamed voice you don't know the name of but want tracked can be *kept*: it becomes a known
+voice called "Voice N" and raises alerts like a named person. Rename it whenever you learn who it is.
+
 **Merge suggestions.** Incremental clustering can split one person across several unnamed voices when the
 mic or room changes. Build Database lists pairs that are probably the same person, with both clips, and a
 one-click merge.
@@ -194,6 +203,18 @@ voiceflock/
   config.py     settings (DB + env)          schema.sql   static/ (UI)
 tests/          pytest: unit tests need no models; `-m slow` runs the end-to-end test with the real ECAPA model
 ```
+
+## Always-on listening (the Android question)
+
+Live mode in the web UI is the proof of concept: a 3 s window is embedded every second and matched against
+the library. On the laptop CPU that costs well under 10% of one core. The same maths runs on a phone:
+ECAPA-TDNN is a 20 MB model that runs faster than realtime on a mid-range Android CPU through ONNX
+Runtime or TFLite, the gallery (even 900 people × a dozen prints) is a few megabytes, and a voice-activity
+detector keeps the model idle during silence. An on-device app is therefore feasible, offline, with a
+foreground service and roughly 5-10% battery per hour of active listening. The alternative, streaming the
+mic to the laptop over Tailscale, reuses this exact server code (`/ws/live`) and is a week of work less,
+at the cost of needing connectivity. Either way, check the recording-consent law where you are before
+listening to people continuously.
 
 ## Updating
 

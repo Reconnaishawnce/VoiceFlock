@@ -13,12 +13,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, audio, config, db, feeds, gallery, transfer, worker
+from . import __version__, audio, config, db, feeds, gallery, live, transfer, worker
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -185,7 +185,21 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         p["speech_seconds"] = conn.execute("SELECT COALESCE(SUM(speech_seconds),0) FROM source_speakers WHERE person_id=?",
                                            (p["id"],)).fetchone()[0]
         p["heard_in"] = person_sources(conn, p["id"], limit=50)
+        p["glyph"] = person_glyph(conn, p["id"])
         return p
+
+    def person_mean(conn, person_id: int):
+        import numpy as np
+        rows = conn.execute("SELECT embedding FROM prints WHERE person_id=? AND is_mean=1 LIMIT 50", (person_id,)).fetchall()
+        if not rows:
+            rows = conn.execute("SELECT embedding FROM prints WHERE person_id=? LIMIT 50", (person_id,)).fetchall()
+        if not rows:
+            return None
+        return gallery.l2n(np.mean(np.stack([db.blob_to_emb(r["embedding"]) for r in rows]), axis=0))
+
+    def person_glyph(conn, person_id: int):
+        m = person_mean(conn, person_id)
+        return live.glyph(m) if m is not None else None
 
     def delete_empty_provisional(conn, person_id: int | None) -> bool:
         if not person_id:
@@ -490,7 +504,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     # ---------------------------------------------------------------- jobs
     @app.get("/api/jobs")
     def list_jobs(status: str | None = None, limit: int = 50, conn=Depends(get_conn)):
-        q = ("SELECT j.*, s.name AS source_name, s.mode AS source_mode FROM jobs j LEFT JOIN sources s ON s.id=j.source_id")
+        q = ("SELECT j.*, s.name AS source_name, s.mode AS source_mode, s.enroll_person_id FROM jobs j LEFT JOIN sources s ON s.id=j.source_id")
         params: list[Any] = []
         if status:
             q += " WHERE j.status=?"; params.append(status)
@@ -510,6 +524,18 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         if j["status"] == "queued" and j["source_id"] is not None:
             conn.execute("UPDATE sources SET status='failed', error='cancelled' WHERE id=?", (j["source_id"],))
         return {"cancelled": True, "status": j["status"]}
+
+    @app.delete("/api/jobs/{jid}")
+    def delete_job(jid: int, conn=Depends(get_conn)):
+        n = conn.execute("DELETE FROM jobs WHERE id=? AND status!='running'", (jid,)).rowcount
+        if not n:
+            raise HTTPException(409, "job is running or does not exist")
+        return {"deleted": jid}
+
+    @app.post("/api/jobs/clear")
+    def clear_jobs(conn=Depends(get_conn)):
+        n = conn.execute("DELETE FROM jobs WHERE status IN ('done','failed','cancelled')").rowcount
+        return {"deleted": n}
 
     @app.post("/api/jobs/{jid}/retry")
     def retry_job(jid: int, conn=Depends(get_conn)):
@@ -604,6 +630,21 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         with db.tx(conn):
             merge_persons(conn, pid, body.into_id)
         return person_out(conn, db.row(conn, "SELECT * FROM persons WHERE id=?", (body.into_id,)))
+
+    @app.post("/api/persons/{pid}/accept")
+    def accept_person(pid: int, conn=Depends(get_conn)):
+        """Keep an unnamed voice as a known voice without naming it: it then raises alerts like a named person."""
+        p = db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,))
+        if not p:
+            raise HTTPException(404)
+        with db.tx(conn):
+            name = p["name"].replace("Unknown Voice", "Voice") if p["name"].startswith("Unknown Voice") else p["name"]
+            conn.execute("UPDATE persons SET kind='named', name=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (name, pid))
+            conn.execute("UPDATE source_speakers SET assignment='named' WHERE person_id=? AND assignment='auto'", (pid,))
+            conn.execute("UPDATE matches SET status='confirmed' WHERE person_id=? AND status='auto'", (pid,))
+            db.bump_prints_version(conn)
+            queue_rematch(conn)
+        return person_out(conn, db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,)))
 
     @app.delete("/api/persons/{pid}")
     def delete_person(pid: int, conn=Depends(get_conn)):
@@ -819,6 +860,92 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         with db.tx(conn):
             queue_rematch(conn)
         return stats
+
+    # ---------------------------------------------------------------- overview (charts)
+    @app.get("/api/overview")
+    def overview(conn=Depends(get_conn)):
+        import numpy as np
+        persons = db.rows(conn,
+            "SELECT p.id, p.name, p.kind, (SELECT COUNT(DISTINCT source_id) FROM source_speakers WHERE person_id=p.id) AS n_sources,"
+            " (SELECT COALESCE(SUM(speech_seconds),0) FROM source_speakers WHERE person_id=p.id) AS speech_seconds FROM persons p")
+        means, keep = [], []
+        for p in persons:
+            m = person_mean(conn, p["id"])
+            if m is not None:
+                means.append(m)
+                keep.append(p)
+        voices = []
+        if len(means) >= 1:
+            X = np.stack(means)
+            Xc = X - X.mean(axis=0)
+            if len(means) >= 3:
+                _, _, vt = np.linalg.svd(Xc, full_matrices=False)
+                xy = Xc @ vt[:2].T
+            else:
+                xy = np.zeros((len(means), 2))
+                xy[:, 0] = np.arange(len(means))
+            span = max(1e-6, float(np.abs(xy).max()))
+            xy = xy / span
+            for p, m, (x, y) in zip(keep, means, xy):
+                voices.append({**p, "x": round(float(x), 4), "y": round(float(y), 4), "glyph": live.glyph(m)})
+        top = sorted(voices, key=lambda v: -v["speech_seconds"])[:12]
+        activity = db.rows(conn,
+            "SELECT substr(created_at,1,10) AS day, COUNT(*) AS recordings, COALESCE(SUM(duration_s),0)/3600.0 AS hours"
+            " FROM sources WHERE status!='deleted' GROUP BY day ORDER BY day")
+        pairs = db.rows(conn,
+            "SELECT a.person_id AS a_id, pa.name AS a_name, b.person_id AS b_id, pb.name AS b_name, COUNT(DISTINCT a.source_id) AS n"
+            " FROM source_speakers a JOIN source_speakers b ON a.source_id=b.source_id AND a.person_id<b.person_id"
+            " JOIN persons pa ON pa.id=a.person_id JOIN persons pb ON pb.id=b.person_id"
+            " GROUP BY a.person_id, b.person_id ORDER BY n DESC, a.person_id LIMIT 15")
+        st = db.row(conn, "SELECT COUNT(*) AS recordings, COALESCE(SUM(duration_s),0)/3600.0 AS hours FROM sources WHERE status='done'")
+        return {
+            "stats": {"recordings": st["recordings"], "hours": round(st["hours"], 1),
+                      "known": sum(1 for p in persons if p["kind"] == "named"),
+                      "unknown": sum(1 for p in persons if p["kind"] == "provisional"),
+                      "prints": conn.execute("SELECT COUNT(*) FROM prints").fetchone()[0],
+                      "speech_hours": round(sum(p["speech_seconds"] for p in persons) / 3600.0, 1),
+                      "open_alerts": conn.execute("SELECT COUNT(*) FROM matches m JOIN persons p ON p.id=m.person_id"
+                                                  " WHERE m.status='auto' AND p.kind='named'").fetchone()[0]},
+            "voices": voices, "top_voices": top, "activity": activity, "pairs": pairs,
+        }
+
+    # ---------------------------------------------------------------- live listening
+    @app.websocket("/ws/live")
+    async def ws_live(ws: WebSocket):
+        """Binary frames: int16 PCM, 16 kHz mono. Server replies with JSON status/frame messages."""
+        import asyncio
+
+        import numpy as np
+        await ws.accept()
+        conn = db.connect()
+        try:
+            settings = config.Settings(conn)
+            await ws.send_json({"type": "status", "text": "loading embedding model…"})
+            from .embed import Embedder
+            try:
+                emb = await asyncio.to_thread(Embedder.get, settings["embedding_model"], settings["device"], config.MODEL_DIR)
+            except Exception as e:  # noqa: BLE001
+                await ws.send_json({"type": "error", "text": f"could not load embedding model: {e}"})
+                return
+            matcher = live.LiveMatcher.from_settings(emb, lambda: app.state.gcache.get(conn, settings), settings)
+            g = app.state.gcache.get(conn, settings)
+            await ws.send_json({"type": "status", "text": f"listening · {len(g.persons)} voices in gallery",
+                                "threshold": float(settings["match_threshold"]), "gallery": len(g.persons)})
+            while True:
+                msg = await ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                data = msg.get("bytes")
+                if not data:
+                    continue
+                samples = np.frombuffer(data, dtype=np.int16)
+                frames = await asyncio.to_thread(matcher.feed, samples)
+                for f in frames:
+                    await ws.send_json(f.as_dict())
+        except WebSocketDisconnect:
+            pass
+        finally:
+            conn.close()
 
     # ---------------------------------------------------------------- static
     config.ensure_dirs()

@@ -11,9 +11,11 @@
 <header>
   <div class="brand"><span class="logo">🪶</span> VoiceFlock <span class="ver" id="ver"></span></div>
   <nav id="tabs">
+    <button data-tab="overview">Overview</button>
     <button data-tab="bulk">Bulk Scan</button>
     <button data-tab="build">Build Database</button>
     <button data-tab="match">VoiceFlock Match</button>
+    <button data-tab="live">Live</button>
     <button data-tab="sources">Sources &amp; Queue</button>
     <button data-tab="settings">Settings</button>
   </nav>
@@ -22,13 +24,41 @@
 <div id="banner" class="banner hidden"></div>
 
 <main>
+  <!-- ======================= OVERVIEW ======================= -->
+  <section id="tab-overview" class="tab hidden">
+    <div class="tiles" id="ov-tiles"></div>
+    <div class="row">
+      <div class="card col">
+        <div class="hdr"><h2>Voice map</h2><span class="muted" id="ov-map-hint">every voice in the library, placed by similarity · size = speaking time · click to open</span></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>known person</span><span><i style="background:var(--s3)"></i>unnamed voice</span></div>
+        <div class="mapwrap"><canvas id="ov-map" height="420"></canvas><div id="ov-tip" class="tip hidden"></div></div>
+      </div>
+      <div class="card col narrow">
+        <h2>Most heard</h2>
+        <div id="ov-top"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="card col">
+        <h2>Recordings over time</h2>
+        <div id="ov-activity"></div>
+      </div>
+      <div class="card col narrow">
+        <h2>Heard together</h2>
+        <p class="muted">Pairs of voices that share the most recordings.</p>
+        <div id="ov-pairs"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ======================= BULK ======================= -->
   <section id="tab-bulk" class="tab">
     <div class="row">
       <div class="card col">
-        <h2>Bulk scan</h2>
-        <p class="muted">Drop many files (or paste URLs). Every speaker gets voiceprinted. Known voices raise an alert;
-          new voices are saved as unnamed voices so future recordings can match them.</p>
+        <h2>Bulk scan: build the background library</h2>
+        <p class="muted">Drop many files or paste URLs and walk away. Every speaker is voiceprinted and filed automatically:
+          known people raise an alert, everyone else is stored as an unnamed voice. Nothing asks you to name anything.
+          Later, under <b>Build Database</b>, you identify people by uploading reference audio or by naming the voices you recognise.</p>
         <div class="dropzone" id="drop-bulk">Drop audio/video files here or <label class="link">browse<input type="file" multiple hidden id="file-bulk"></label></div>
         <div class="urlrow"><input id="url-bulk" placeholder="https://… (YouTube, podcast episode, direct link)"><button id="btn-url-bulk">Queue URL</button></div>
         <label class="chk"><input type="checkbox" id="inc-bulk"> Incognito: match only, don't save any voices from these files</label>
@@ -63,8 +93,8 @@
   <section id="tab-build" class="tab hidden">
     <div class="row">
       <div class="card col narrow">
-        <h2>Enroll a known voice</h2>
-        <p class="muted">Upload clip(s) of someone you already know. The speaker with the most speech in each file is enrolled under this name; other speakers go through the normal flow.</p>
+        <h2>Identify someone</h2>
+        <p class="muted">Type a name and drop reference audio of that person (an interview, a speech, a voicemail). The dominant speaker is enrolled under the name, and every recording already in the library is re-checked for them within seconds.</p>
         <input id="enroll-name" placeholder="Person name" list="person-names">
         <datalist id="person-names"></datalist>
         <div class="dropzone small" id="drop-enroll">Drop clip(s) or <label class="link">browse<input type="file" multiple hidden id="file-enroll"></label></div>
@@ -77,7 +107,7 @@
       <div class="card col">
         <div id="merge-suggestions"></div>
         <h2>Unnamed voices <span class="muted" id="unnamed-count"></span></h2>
-        <p class="muted">Listen, then name the voice. Typing an existing name merges into that person. Use <b>Merge</b> when two unnamed voices are the same person.</p>
+        <p class="muted">Background data, sorted by how often each voice shows up. Name a voice if you know it; <b>Keep</b> it to track it as a known voice without a name (it will raise alerts like a named person); <b>Merge</b> duplicates.</p>
         <div id="unnamed"></div>
       </div>
     </div>
@@ -102,11 +132,32 @@
     </div>
   </section>
 
+  <!-- ======================= LIVE ======================= -->
+  <section id="tab-live" class="tab hidden">
+    <div class="row">
+      <div class="card col narrow">
+        <h2>Live listen</h2>
+        <p class="muted">Uses this device's microphone. Every second the last few seconds of audio are voiceprinted and compared with the whole library, on this machine, nothing is recorded or saved.</p>
+        <div class="actions"><button id="btn-live" class="primary">▶ Start listening</button></div>
+        <div class="level"><i id="live-level"></i></div>
+        <div id="live-status" class="muted"></div>
+        <label class="chk"><input type="checkbox" id="live-beep" checked> Beep on a known voice</label>
+        <label class="chk"><input type="checkbox" id="live-notify"> Browser notification on a known voice</label>
+        <p class="muted" style="font-size:12px">Browser rule: the microphone works on the laptop itself (localhost) or over HTTPS, e.g. a Tailscale HTTPS address, not plain http://ip from a phone.</p>
+      </div>
+      <div class="card col">
+        <div id="live-now" class="livenow"><div class="muted">Not listening.</div></div>
+        <h3>Log</h3>
+        <div id="live-log"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ======================= SOURCES ======================= -->
   <section id="tab-sources" class="tab hidden">
     <div class="row">
       <div class="card col narrow">
-        <h2>Queue</h2>
+        <div class="hdr"><h2>Queue</h2><button class="small" id="btn-clear-jobs">Clear finished</button></div>
         <div id="jobs"></div>
       </div>
       <div class="card col">
