@@ -69,7 +69,7 @@ def prepare_source(conn: sqlite3.Connection, source: dict, progress: Progress) -
         if source["url"]:
             progress("downloading", 0.0)
             out_dir = config.ORIG_DIR / f"url_{sid}"
-            orig = audio.download_url(source["url"], out_dir)
+            orig = audio.download_url(source["url"], out_dir, progress=lambda f: progress("downloading", f))
             conn.execute("UPDATE sources SET orig_path=?, original_filename=? WHERE id=?", (str(orig), orig.name, sid))
             if not source["name"] or source["name"] == source["url"]:
                 conn.execute("UPDATE sources SET name=? WHERE id=?", (orig.stem.replace("_", " "), sid))
@@ -77,8 +77,8 @@ def prepare_source(conn: sqlite3.Connection, source: dict, progress: Progress) -
             raise audio.AudioError("source file is missing")
     wav_path = config.AUDIO_DIR / f"{sid}.wav"
     if not wav_path.exists():
-        progress("converting", 0.0)
-        audio.to_wav16k(orig, wav_path)
+        progress("converting to 16 kHz wav (video is dropped)", 0.0)
+        audio.to_wav16k(orig, wav_path, progress=lambda f: progress("converting to 16 kHz wav (video is dropped)", f))
     dur = audio.duration_seconds(wav_path)
     sha = source["sha256"] or audio.sha256_file(orig)
     conn.execute("UPDATE sources SET wav_path=?, duration_s=?, sha256=? WHERE id=?", (str(wav_path), dur, sha, sid))
@@ -259,11 +259,11 @@ def process_source(conn: sqlite3.Connection, source_id: int, progress: Progress 
     source = db.row(conn, "SELECT * FROM sources WHERE id=?", (source_id,))
     wav = audio.load_wav(wav_path)
 
-    progress("loading models", 0.0)
+    progress("loading models (first run downloads ~1 GB, can take several minutes)", 0.0)
     diar = Diarizer.get(settings["diarization_pipeline"], settings["hf_token"], settings["device"], config.MODEL_DIR)
     emb = Embedder.get(settings["embedding_model"], settings["device"], config.MODEL_DIR)
 
-    progress("diarizing", 0.0)
+    progress("diarizing (speaker turns)", 0.0)
     turns = diar.run(wav, audio.SR, int(settings["max_speakers"]),
                      progress=lambda step, f: progress(f"diarizing: {step}", f))
 

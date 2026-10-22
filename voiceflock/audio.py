@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -54,14 +57,40 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def to_wav16k(src: Path, dst: Path) -> Path:
-    """Convert anything ffmpeg can read to 16 kHz mono PCM wav."""
+def ffprobe_duration(src: Path) -> float | None:
+    """Duration of any media file via ffprobe (next to ffmpeg); None if unavailable."""
+    probe = Path(ffmpeg_bin()).with_name("ffprobe" + (".exe" if os.name == "nt" else ""))
+    if not probe.exists():
+        probe = shutil.which("ffprobe")
+        if not probe:
+            return None
+    r = subprocess.run([str(probe), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(src)],
+                       capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return None
+
+
+def to_wav16k(src: Path, dst: Path, progress: Callable[[float], None] | None = None) -> Path:
+    """Convert anything ffmpeg can read (audio or video: the video stream is dropped) to 16 kHz mono PCM wav.
+    `progress` receives 0..1 as ffmpeg reports how far into the file it is."""
     dst.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [ffmpeg_bin(), "-y", "-nostdin", "-loglevel", "error", "-i", str(src),
-           "-vn", "-ac", "1", "-ar", str(SR), "-c:a", "pcm_s16le", str(dst)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0 or not dst.exists():
-        raise AudioError(f"ffmpeg failed: {r.stderr.strip()[:500]}")
+    total = ffprobe_duration(src) if progress else None
+    cmd = [ffmpeg_bin(), "-y", "-nostdin", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-i", str(src),
+           "-vn", "-sn", "-dn", "-ac", "1", "-ar", str(SR), "-c:a", "pcm_s16le", str(dst)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if progress and total and line.startswith("out_time_us="):
+            try:
+                progress(min(1.0, int(line.split("=", 1)[1]) / 1e6 / total))
+            except ValueError:
+                pass
+    err = proc.stderr.read() if proc.stderr else ""
+    proc.wait()
+    if proc.returncode != 0 or not dst.exists() or dst.stat().st_size < 100:
+        raise AudioError(f"ffmpeg failed: {err.strip()[:500] or 'no audio stream found'}")
     return dst
 
 
@@ -81,24 +110,41 @@ def load_wav(path: Path) -> np.ndarray:
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
-def download_url(url: str, out_dir: Path) -> Path:
+def ytdlp_cmd() -> list[str]:
+    """yt-dlp from the same Python environment as VoiceFlock (never the system `python`)."""
+    exe = Path(sys.executable).with_name("yt-dlp" + (".exe" if os.name == "nt" else ""))
+    if exe.exists():
+        return [str(exe)]
+    try:
+        import yt_dlp  # noqa: F401
+        return [sys.executable, "-m", "yt_dlp"]
+    except Exception:
+        pass
+    found = shutil.which("yt-dlp")
+    if found:
+        return [found]
+    raise AudioError("yt-dlp is not installed in VoiceFlock's environment: run  pip install yt-dlp  "
+                     "(Windows: .venv\\Scripts\\pip install yt-dlp) and retry.")
+
+
+def download_url(url: str, out_dir: Path, progress: Callable[[float], None] | None = None) -> Path:
     """Download the best audio for a URL with yt-dlp (YouTube, podcast pages, direct links)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    ytdlp = shutil.which("yt-dlp")
-    if ytdlp is None:
-        try:
-            import yt_dlp  # noqa: F401
-            cmd0 = ["python", "-m", "yt_dlp"]
-        except Exception as e:  # pragma: no cover
-            raise AudioError("yt-dlp is not installed; pip install yt-dlp") from e
-    else:
-        cmd0 = [ytdlp]
     tmpl = str(out_dir / "%(title).120B [%(id)s].%(ext)s")
-    cmd = cmd0 + ["--no-playlist", "-f", "bestaudio/best", "-x", "--audio-format", "m4a",
-                  "--no-progress", "--restrict-filenames", "-o", tmpl, url]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise AudioError(f"yt-dlp failed: {r.stderr.strip()[-600:]}")
+    cmd = ytdlp_cmd() + ["--no-playlist", "-f", "bestaudio/best", "-x", "--audio-format", "m4a", "--newline",
+                         "--restrict-filenames", "--ffmpeg-location", str(Path(ffmpeg_bin()).parent), "-o", tmpl, url]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    assert proc.stdout is not None
+    tail: list[str] = []
+    for line in proc.stdout:
+        tail.append(line.rstrip())
+        tail = tail[-30:]
+        m = re.search(r"\[download\]\s+([\d.]+)%", line)
+        if progress and m:
+            progress(float(m.group(1)) / 100.0)
+    proc.wait()
+    if proc.returncode != 0:
+        raise AudioError("yt-dlp failed: " + " | ".join(tail[-6:])[-600:])
     files = sorted(out_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
     files = [f for f in files if f.is_file() and not f.name.endswith(".part")]
     if not files:

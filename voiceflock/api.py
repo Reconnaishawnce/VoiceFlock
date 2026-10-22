@@ -475,10 +475,16 @@ def create_app(run_worker: bool = True) -> FastAPI:
 
     @app.post("/api/jobs/{jid}/cancel")
     def cancel_job(jid: int, conn=Depends(get_conn)):
-        n = conn.execute("UPDATE jobs SET status='cancelled' WHERE id=? AND status='queued'", (jid,)).rowcount
-        if n:
-            conn.execute("UPDATE sources SET status='failed', error='cancelled' WHERE id=(SELECT source_id FROM jobs WHERE id=?)", (jid,))
-        return {"cancelled": bool(n)}
+        """Queued jobs are dropped immediately; a running job stops at its next progress tick (a few seconds)."""
+        j = db.row(conn, "SELECT * FROM jobs WHERE id=?", (jid,))
+        if not j:
+            raise HTTPException(404)
+        if j["status"] not in ("queued", "running"):
+            return {"cancelled": False, "status": j["status"]}
+        conn.execute("UPDATE jobs SET status='cancelled', stage='cancelling' WHERE id=?", (jid,))
+        if j["status"] == "queued" and j["source_id"] is not None:
+            conn.execute("UPDATE sources SET status='failed', error='cancelled' WHERE id=?", (j["source_id"],))
+        return {"cancelled": True, "status": j["status"]}
 
     @app.post("/api/jobs/{jid}/retry")
     def retry_job(jid: int, conn=Depends(get_conn)):

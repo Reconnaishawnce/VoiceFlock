@@ -180,11 +180,19 @@ voiceflock/
 tests/          pytest: unit tests need no models; `-m slow` runs the end-to-end test with the real ECAPA model
 ```
 
+## Updating
+
+Native install: close VoiceFlock, double-click `update.bat` (Windows) or run `./update.sh` (Mac/Linux), start it
+again. Docker: `git pull && docker compose up -d --build`. Your `data` folder is never touched by updates.
+
 ## Notes & limits
 
 * CPU speed: roughly 5-10× real time for diarization on a laptop CPU (a 1 h podcast ≈ 10-15 min).
   A GPU brings that to about a minute. Jobs run one at a time per worker; start more with `voiceflock worker`.
 * Long files are processed whole (3 h ≈ 0.7 GB RAM for the waveform). Split anything longer than ~4 h.
+* Video files (mp4, mkv, mov, webm, ...) are fine: only the audio track is used, the video is dropped during
+  conversion. A file with no audio track fails with "no audio stream found".
+* A running job can be stopped from Sources & Queue; it halts at its next progress tick (seconds).
 * URLs use `yt-dlp` (YouTube, most podcast pages, direct media links).
 * Performance numbers depend on your audio. Run `calibrate`/`evaluate` on clips that look like your real
   use (same mics, rooms, phone lines) before trusting the probabilities.

@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 FEED_POLL_EVERY_S = 60.0
 
 
+class JobCancelled(Exception):
+    pass
+
+
 def enqueue(conn, source_id: int | None, job_type: str = "process_source", priority: int = 0,
             dedupe: bool = False) -> int:
     """Queue a job. With dedupe=True, return the id of an identical already-queued job instead of adding one."""
@@ -47,10 +51,22 @@ def claim_job(conn, worker_name: str) -> dict | None:
 
 def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
     jid = job["id"]
-    last = [0.0]
+    last = [0.0, 0.0]          # last progress write, last cancel check
+    cur_stage = [None]
+    stage_log: list[str] = []
 
     def progress(stage: str, frac: float):
         now = time.time()
+        if stage != cur_stage[0]:
+            cur_stage[0] = stage
+            stage_log.append(f"{time.strftime('%H:%M:%S')}  {stage}")
+            conn.execute("UPDATE jobs SET log=? WHERE id=?", ("\n".join(stage_log[-40:]), jid))
+            last[0] = 0.0
+        if now - last[1] > 2.0:
+            last[1] = now
+            st = conn.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone()
+            if st and st[0] == "cancelled":
+                raise JobCancelled()
         if now - last[0] < 0.5 and 0.0 < frac < 1.0:
             return
         last[0] = now
@@ -78,6 +94,12 @@ def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
             raise ValueError(f"unknown job type {job['type']}")
         conn.execute("UPDATE jobs SET status='done', progress=100, stage='done', result=?,"
                      " finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (json.dumps(result, default=str), jid))
+    except JobCancelled:
+        log.info("job %s cancelled", jid)
+        conn.execute("UPDATE jobs SET status='cancelled', stage='cancelled', finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (jid,))
+        if job["type"] == "process_source" and job["source_id"] is not None:
+            conn.execute("UPDATE sources SET status='failed', error='cancelled' WHERE id=?", (job["source_id"],))
+        return
     except Exception as e:  # noqa: BLE001
         err = f"{type(e).__name__}: {e}"
         log.error("job %s failed: %s\n%s", jid, err, traceback.format_exc())
