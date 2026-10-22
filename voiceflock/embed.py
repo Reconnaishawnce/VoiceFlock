@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 
@@ -21,8 +22,19 @@ class Embedder:
             from speechbrain.pretrained import EncoderClassifier  # type: ignore
         self.device = pick_device(device)
         savedir = (cache_dir or config.MODEL_DIR) / ("speechbrain_" + model_name.replace("/", "_"))
-        self.model = EncoderClassifier.from_hparams(source=model_name, savedir=str(savedir),
-                                                    run_opts={"device": self.device})
+        kw = {"source": model_name, "savedir": str(savedir), "run_opts": {"device": self.device}}
+        if os.name == "nt":
+            # Windows: copy model files instead of symlinking so Developer Mode isn't required.
+            try:
+                from speechbrain.utils.fetching import LocalStrategy
+                kw["local_strategy"] = LocalStrategy.COPY
+            except Exception:  # speechbrain < 1.0
+                pass
+        try:
+            self.model = EncoderClassifier.from_hparams(**kw)
+        except TypeError:
+            kw.pop("local_strategy", None)
+            self.model = EncoderClassifier.from_hparams(**kw)
         self.model.eval()
         self.name = model_name
 

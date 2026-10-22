@@ -53,17 +53,25 @@ and the UI/API ask for it (HTTP basic auth, any username).
 
 NVIDIA GPU: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`.
 
-### 2b. Run natively
+### 2b. Run natively on Windows (no Docker)
+
+1. Install Git (https://git-scm.com) if you don't have it, then in PowerShell:
+   `git clone https://github.com/Reconnaishawnce/VoiceFlock` and `cd VoiceFlock`
+2. Right-click `setup.ps1` → **Run with PowerShell** (or `powershell -ExecutionPolicy Bypass -File setup.ps1`).
+   It installs Python 3.11 and ffmpeg through winget if they're missing, creates `.venv`, installs PyTorch
+   (CUDA build if an NVIDIA GPU is present) and VoiceFlock, asks for your HF token and a UI password, and can
+   register itself to start at login.
+3. Double-click `VoiceFlock.bat`. It starts the server and opens http://localhost:8787. Closing the window
+   stops the server.
+
+No Developer Mode / symlink permission is needed: on Windows the models are copied instead of linked.
+
+### 2c. Run natively on macOS / Linux
 
 ```bash
-# needs python >= 3.10 and ffmpeg on PATH
-python -m venv .venv && . .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu   # or a CUDA build
-pip install -e .
-voiceflock serve                                      # http://localhost:8787
+bash setup.sh        # venv + torch + ffmpeg check + .env
+./voiceflock.sh      # http://localhost:8787
 ```
-
-On Windows, SpeechBrain wants symlink permission (enable Developer Mode) — Docker avoids that.
 
 ## How matching works
 

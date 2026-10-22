@@ -3,6 +3,7 @@ and the clip-quality score (speech duration, SNR, clipping)."""
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,11 +19,28 @@ class AudioError(RuntimeError):
     pass
 
 
+_FFMPEG: str | None = None
+
+
 def ffmpeg_bin() -> str:
-    b = shutil.which("ffmpeg")
-    if not b:
-        raise AudioError("ffmpeg not found on PATH. Install ffmpeg (apt install ffmpeg / brew install ffmpeg).")
-    return b
+    """ffmpeg from $VOICEFLOCK_FFMPEG, PATH, or the usual Windows install spots (winget / chocolatey / C:\\ffmpeg)."""
+    global _FFMPEG
+    if _FFMPEG and Path(_FFMPEG).exists():
+        return _FFMPEG
+    cands = [os.environ.get("VOICEFLOCK_FFMPEG"), shutil.which("ffmpeg")]
+    if os.name == "nt":
+        for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles", ""), "C:\\"):
+            if not base:
+                continue
+            cands += [str(p) for p in Path(base).glob("Microsoft/WinGet/Packages/Gyan.FFmpeg*/**/bin/ffmpeg.exe")]
+            cands += [str(p) for p in Path(base).glob("ffmpeg*/bin/ffmpeg.exe")]
+        cands += ["C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe"]
+    for c in cands:
+        if c and Path(c).exists():
+            _FFMPEG = c
+            return c
+    raise AudioError("ffmpeg not found. Install it (Windows: winget install Gyan.FFmpeg; Mac: brew install ffmpeg; "
+                     "Linux: apt install ffmpeg) or set VOICEFLOCK_FFMPEG to the ffmpeg executable.")
 
 
 def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
