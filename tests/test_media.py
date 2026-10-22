@@ -39,12 +39,52 @@ def test_video_without_audio_fails_cleanly(tmp_path):
         audio.to_wav16k(tmp_path / "silent.mp4", tmp_path / "out.wav")
 
 
-def test_ytdlp_uses_the_app_environment(tmp_path, monkeypatch):
-    cmd = audio.ytdlp_cmd()
-    assert cmd[0] != "python"
-    assert cmd[0] == sys.executable or Path(cmd[0]).name.startswith("yt-dlp")
+def test_ytdlp_runs_in_process_with_progress(tmp_path, monkeypatch):
+    import types
+    seen = {}
 
-    calls = []
+    class FakeYDL:
+        def __init__(self, opts):
+            seen["opts"] = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def download(self, urls):
+            seen["urls"] = urls
+            for h in seen["opts"]["progress_hooks"]:
+                h({"status": "downloading", "downloaded_bytes": 50, "total_bytes": 200})
+                h({"status": "finished"})
+            (tmp_path / "Episode_12 [abc].webm").write_bytes(b"x")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYDL))
+    ticks = []
+    out = audio.download_url("https://youtube.com/watch?v=abc", tmp_path, progress=ticks.append)
+    assert out.name == "Episode_12 [abc].webm" and ticks == [0.25]
+    assert seen["urls"] == ["https://youtube.com/watch?v=abc"]
+    assert seen["opts"]["format"] == "bestaudio/best" and "postprocessors" not in seen["opts"]
+    assert Path(seen["opts"]["ffmpeg_location"]).exists()
+
+    class FailingYDL(FakeYDL):
+        def download(self, urls):
+            raise RuntimeError("ERROR: Sign in to confirm you're not a bot")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FailingYDL))
+    with pytest.raises(audio.AudioError, match="not a bot.*Hint"):
+        audio.download_url("https://youtube.com/watch?v=abc", tmp_path)
+
+
+def test_ytdlp_subprocess_fallback_never_uses_system_python(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)  # import fails -> subprocess path
+    cmd_head = None
+    try:
+        cmd_head = audio.ytdlp_cmd()
+    except audio.AudioError:
+        pytest.skip("no yt-dlp executable available for the fallback here")
+    assert cmd_head[0] != "python"
 
     class FakeProc:
         returncode = 0
@@ -52,6 +92,8 @@ def test_ytdlp_uses_the_app_environment(tmp_path, monkeypatch):
 
         def wait(self):
             return 0
+
+    calls = []
 
     def fake_popen(c, **kw):
         calls.append(c)
@@ -61,9 +103,8 @@ def test_ytdlp_uses_the_app_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(audio.subprocess, "Popen", fake_popen)
     ticks = []
     out = audio.download_url("https://example.com/ep", tmp_path, progress=ticks.append)
-    assert out.name == "Episode [abc].m4a"
-    assert calls[0][:1] == cmd[:1] and "--ffmpeg-location" in calls[0] and calls[0][-1] == "https://example.com/ep"
-    assert ticks == [0.125, 1.0]
+    assert out.name == "Episode [abc].m4a" and ticks == [0.125, 1.0]
+    assert calls[0][-1] == "https://example.com/ep" and "--ffmpeg-location" in calls[0]
 
 
 def test_cancel_running_job(conn, monkeypatch):

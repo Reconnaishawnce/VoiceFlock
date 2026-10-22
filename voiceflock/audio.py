@@ -111,15 +111,16 @@ def load_wav(path: Path) -> np.ndarray:
 
 
 def ytdlp_cmd() -> list[str]:
-    """yt-dlp from the same Python environment as VoiceFlock (never the system `python`)."""
-    exe = Path(sys.executable).with_name("yt-dlp" + (".exe" if os.name == "nt" else ""))
-    if exe.exists():
-        return [str(exe)]
+    """Fallback command for yt-dlp. Prefers `python -m yt_dlp` through VoiceFlock's own (signed) interpreter;
+    the pip-generated yt-dlp.exe launcher is last because app-control policies often block it (WinError 5)."""
     try:
         import yt_dlp  # noqa: F401
         return [sys.executable, "-m", "yt_dlp"]
     except Exception:
         pass
+    exe = Path(sys.executable).with_name("yt-dlp" + (".exe" if os.name == "nt" else ""))
+    if exe.exists():
+        return [str(exe)]
     found = shutil.which("yt-dlp")
     if found:
         return [found]
@@ -127,12 +128,60 @@ def ytdlp_cmd() -> list[str]:
                      "(Windows: .venv\\Scripts\\pip install yt-dlp) and retry.")
 
 
+def _newest_file(out_dir: Path) -> Path:
+    files = [f for f in out_dir.iterdir() if f.is_file() and not f.name.endswith((".part", ".ytdl"))]
+    if not files:
+        raise AudioError("yt-dlp produced no file")
+    return max(files, key=lambda p: p.stat().st_mtime)
+
+
 def download_url(url: str, out_dir: Path, progress: Callable[[float], None] | None = None) -> Path:
-    """Download the best audio for a URL with yt-dlp (YouTube, podcast pages, direct links)."""
+    """Download the best audio stream for a URL (YouTube, podcast pages, direct links).
+
+    Runs yt-dlp in-process (no child executable, which Windows app-control can block) and keeps the
+    native container (webm/opus, m4a, mp3...): ffmpeg converts it to 16 kHz wav in the next step, so no
+    re-encode is needed here."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        import yt_dlp
+    except ImportError:
+        return _download_url_subprocess(url, out_dir, progress)
+
+    def hook(d):
+        if progress and d.get("status") == "downloading":
+            tot = d.get("total_bytes") or d.get("total_bytes_estimate")
+            done = d.get("downloaded_bytes")
+            if tot and done:
+                progress(min(1.0, done / tot))
+
+    opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "outtmpl": str(out_dir / "%(title).120B [%(id)s].%(ext)s"),
+        "restrictfilenames": True,
+        "quiet": True, "no_warnings": True, "noprogress": True,
+        "progress_hooks": [hook],
+        "ffmpeg_location": str(Path(ffmpeg_bin()).parent),
+        "retries": 5, "fragment_retries": 5,
+        "concurrent_fragment_downloads": 4,
+        "socket_timeout": 60,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except Exception as e:  # noqa: BLE001  (yt_dlp.utils.DownloadError and friends)
+        msg = str(e).replace("ERROR: ", "").strip()
+        hint = ""
+        if "Sign in" in msg or "bot" in msg.lower() or "cookies" in msg.lower():
+            hint = " Hint: YouTube is asking for a login; run update.bat (new yt-dlp) and retry."
+        raise AudioError(f"yt-dlp failed: {msg[:500]}{hint}") from e
+    return _newest_file(out_dir)
+
+
+def _download_url_subprocess(url: str, out_dir: Path, progress: Callable[[float], None] | None = None) -> Path:
     tmpl = str(out_dir / "%(title).120B [%(id)s].%(ext)s")
-    cmd = ytdlp_cmd() + ["--no-playlist", "-f", "bestaudio/best", "-x", "--audio-format", "m4a", "--newline",
-                         "--restrict-filenames", "--ffmpeg-location", str(Path(ffmpeg_bin()).parent), "-o", tmpl, url]
+    cmd = ytdlp_cmd() + ["--no-playlist", "-f", "bestaudio/best", "--newline", "--restrict-filenames",
+                         "--ffmpeg-location", str(Path(ffmpeg_bin()).parent), "-o", tmpl, url]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.stdout is not None
     tail: list[str] = []
@@ -145,11 +194,7 @@ def download_url(url: str, out_dir: Path, progress: Callable[[float], None] | No
     proc.wait()
     if proc.returncode != 0:
         raise AudioError("yt-dlp failed: " + " | ".join(tail[-6:])[-600:])
-    files = sorted(out_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    files = [f for f in files if f.is_file() and not f.name.endswith(".part")]
-    if not files:
-        raise AudioError("yt-dlp produced no file")
-    return files[0]
+    return _newest_file(out_dir)
 
 
 def write_clip(wav: np.ndarray, start_s: float, end_s: float, dst: Path) -> Path:
