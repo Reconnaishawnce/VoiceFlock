@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS source_speakers (
   snr_db REAL,
   clip_fraction REAL,
   clip_path TEXT,
+  stills TEXT,                             -- JSON [{t, file}] low-res video frames for this speaker
   embedding BLOB,
   person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
   assignment TEXT,                         -- auto | confirmed | enrolled | named | NULL

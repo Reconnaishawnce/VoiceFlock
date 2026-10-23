@@ -157,9 +157,9 @@ function watchBtn(h) {
   return `<button class="small" onclick="openSourceAt(${h.id}, ${t})" title="open the recording cued to ${fmtT(t)}">${label} @ ${fmtT(t)}</button>`;
 }
 function thumb(h) {
-  if (!h.youtube_id) return "";
   const t = h.watch_at ?? h.first_start_s ?? 0;
-  return `<img class="thumb" src="https://i.ytimg.com/vi/${esc(h.youtube_id)}/mqdefault.jpg" alt="" onclick="openSourceAt(${h.id}, ${t})" title="watch at ${fmtT(t)}">`;
+  const src = h.still_url || (h.youtube_id ? `https://i.ytimg.com/vi/${esc(h.youtube_id)}/mqdefault.jpg` : null);
+  return src ? `<img class="thumb" src="${esc(src)}" alt="" loading="lazy" onclick="openSourceAt(${h.id}, ${t})" title="${h.still_url ? "still at " : "watch at "}${fmtT(t)}">` : "";
 }
 function heardInRich(list) {
   return list && list.length ? list.map((h) => `<div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech</span><div class="actions" style="margin:4px 0 0">${watchBtn(h)}</div>${clip(h.clip_url)}</div></div>`).join("") : `<span class="muted">(no other recordings)</span>`;
@@ -280,6 +280,7 @@ function sourceView(src) {
     <p class="muted" style="font-size:12px">Click a block on the timeline, a timestamp chip, or <b>▶ watch longest turn</b> to jump the player there and see who is talking.</p>
     <div class="actions">
       ${src.incognito ? "" : `<button class="small" onclick="forgetSource(${src.id})" title="Remove everything this recording added to the library">Forget voices from this file</button>`}
+      ${src.status === "done" && !src.incognito ? `<button class="small" onclick="makeStills(${src.id})" title="Cut low-res frames at each speaker's longest turns">${(src.speakers || []).some((x) => (x.stills || []).length) ? "Redo stills" : "Make stills"}</button>` : ""}
       <button class="small" onclick="reprocess(${src.id})">Reprocess</button>
       <button class="small danger" onclick="deleteSource(${src.id})">Delete recording</button>
     </div>
@@ -338,6 +339,7 @@ function speakerCard(sp, src, idx = 0) {
     <div class="hdr"><div><span class="title">${esc(sp.label)}</span> · ${verdict}</div>
       <div class="q">speech <b>${fmtT(sp.speech_seconds)}</b> · quality <b>${sp.quality_score?.toFixed(0) ?? "-"}</b> · SNR <b>${sp.snr_db?.toFixed(0) ?? "-"} dB</b> · ${sp.n_segments} turns</div></div>
     <div class="actions" style="margin:6px 0">${lg}<div class="chips">${chips}${sp.segments.length > 10 ? `<span class="muted">+${sp.segments.length - 10}</span>` : ""}</div></div>
+    ${(sp.stills || []).length ? `<div class="strip">${sp.stills.map((x) => `<img class="thumb" loading="lazy" src="${esc(x.url)}" title="jump to ${fmtT(x.t)}" onclick="seek(${src.id}, ${x.t})">`).join("")}</div>` : ""}
     ${sp.clip_url ? `<div class="turn">preview clip (best ${SETTINGS.clip_seconds || 8} s of this voice)</div>${clip(sp.clip_url)}` : ""}
     ${qualityWarning(sp)}
     ${candidateTable(sp)}
@@ -361,6 +363,8 @@ async function nameSpeaker(id) {
   try { await api(`/api/speakers/${id}/name`, { method: "POST", body: { name } }); toast(`Saved as ${name}`); render(); loadStats(); } catch (e) { onErr(e); }
 }
 async function forgetSource(id) { if (!confirm("Remove all prints and unnamed voices created from this recording? Results stay visible.")) return; try { await api(`/api/sources/${id}/forget`, { method: "POST" }); toast("Forgotten"); render(); loadStats(); } catch (e) { onErr(e); } }
+async function makeStills(id) { try { await api(`/api/sources/${id}/stills`, { method: "POST" }); toast("Stills queued"); } catch (e) { onErr(e); } }
+async function stillsBackfill() { try { const r = await api("/api/stills/backfill", { method: "POST" }); toast(r.queued ? `Queued stills for ${r.queued} recordings (≈${r.estimated_mb} MB)` : "Every video recording already has stills"); } catch (e) { onErr(e); } }
 async function reprocess(id) { try { await api(`/api/sources/${id}/reprocess`, { method: "POST" }); toast("Queued for reprocessing"); render(); } catch (e) { onErr(e); } }
 async function deleteSource(id) { if (!confirm("Delete this recording, its clips and everything it added to the library?")) return; try { await api(`/api/sources/${id}`, { method: "DELETE" }); toast("Deleted"); go("library"); loadStats(); } catch (e) { onErr(e); } }
 
@@ -657,6 +661,7 @@ async function loadSettings() {
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
     renderSelftest(); renderPhone();
     const st = await api("/api/stats");
+    $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · calibration: ${st.calibrated ? "fitted" : "defaults"} raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;
   } catch (e) { onErr(e); }
 }

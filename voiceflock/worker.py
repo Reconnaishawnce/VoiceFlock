@@ -85,6 +85,9 @@ def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
             from .rematch import rematch
             ids = [int(job["source_id"])] if job["source_id"] is not None else None
             result = rematch(conn, ids, gcache, progress)
+        elif job["type"] == "stills":
+            from .stills import make_stills_for_source
+            result = make_stills_for_source(conn, int(job["source_id"]), progress)
         elif job["type"] == "export_model":
             from .onnx_export import export
             progress("exporting ECAPA to ONNX", 0.1)

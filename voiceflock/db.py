@@ -49,6 +49,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
     if "alert" not in _columns(conn, "persons"):
         conn.execute("ALTER TABLE persons ADD COLUMN alert INTEGER NOT NULL DEFAULT 0")
+    if "stills" not in _columns(conn, "source_speakers"):
+        conn.execute("ALTER TABLE source_speakers ADD COLUMN stills TEXT")
     if "alert_sound" not in _columns(conn, "persons"):
         conn.execute("ALTER TABLE persons ADD COLUMN alert_sound TEXT")
         conn.execute("ALTER TABLE persons ADD COLUMN alert_message TEXT")

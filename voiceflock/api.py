@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, audio, config, db, feeds, gallery, live, mobile, onnx_export, transfer, worker, youtube
+from . import __version__, audio, config, db, feeds, gallery, live, mobile, onnx_export, stills, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -220,6 +220,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         sp = dict(sp)
         sp.pop("embedding", None)
         sp["clip_url"] = f"/clips/{sp['clip_path']}" if sp.get("clip_path") else None
+        sp["stills"] = [{"t": x["t"], "url": f"/stills/{x['file']}"} for x in json.loads(sp.get("stills") or "[]")]
         sp["segments"] = db.rows(conn, "SELECT start_s, end_s FROM segments WHERE source_speaker_id=? ORDER BY start_s",
                                  (sp["id"],))
         if sp["segments"]:
@@ -240,7 +241,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     def person_sources(conn, person_id: int, exclude_source: int | None = None, limit: int = 20) -> list[dict]:
         """Recordings where this person's voice was heard (via assigned speakers), oldest first."""
         q = ("SELECT DISTINCT s.id, s.name, s.created_at, s.url, s.orig_path, ss.first_start_s, ss.id AS speaker_id, ss.assignment, ss.clip_path,"
-             " ss.speech_seconds,"
+             " ss.speech_seconds, ss.stills,"
              " (SELECT start_s FROM segments g WHERE g.source_speaker_id=ss.id ORDER BY (end_s-start_s) DESC LIMIT 1) AS longest_start_s"
              " FROM source_speakers ss JOIN sources s ON s.id=ss.source_id WHERE ss.person_id=? AND s.status!='deleted'")
         params: list[Any] = [person_id]
@@ -256,6 +257,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             op = o.pop("orig_path", None)
             o["media_kind"] = "youtube" if o["youtube_id"] else ("video" if op and Path(op).suffix.lower() in VIDEO_EXTS else "audio")
             o["watch_at"] = o["longest_start_s"] if o.get("longest_start_s") is not None else o.get("first_start_s")
+            st = json.loads(o.pop("stills", None) or "[]")
+            o["still_url"] = f"/stills/{st[0]['file']}" if st else None
         return out
 
     def person_out(conn, p: dict) -> dict:
@@ -388,6 +391,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             "calibrated": bool(db.row(conn, "SELECT 1 AS x FROM calibrations WHERE active=1 LIMIT 1")),
             "open_alerts": conn.execute(
                 "SELECT COUNT(*) FROM matches m JOIN persons p ON p.id=m.person_id WHERE m.status='auto' AND p.kind='named'").fetchone()[0],
+            "stills_mb": round(sum(p.stat().st_size for p in stills.still_dir().glob("*.jpg")) / 1e6, 1),
         }
 
     # ---------------------------------------------------------------- settings
@@ -551,6 +555,28 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             raise HTTPException(404, "media file missing")
         return FileResponse(p)
 
+    @app.post("/api/sources/{sid}/stills")
+    def make_stills(sid: int, conn=Depends(get_conn)):
+        if not db.row(conn, "SELECT id FROM sources WHERE id=? AND status='done'", (sid,)):
+            raise HTTPException(404, "recording not found or not processed yet")
+        with db.tx(conn):
+            jid = worker.enqueue(conn, sid, "stills", priority=2, dedupe=True)
+        return {"job_id": jid}
+
+    @app.post("/api/stills/backfill")
+    def stills_backfill(conn=Depends(get_conn)):
+        """Queue stills for every processed recording that has none yet (videos and YouTube only)."""
+        ids = [r["id"] for r in conn.execute(
+            "SELECT s.id FROM sources s WHERE s.status='done' AND s.incognito=0 AND (s.url LIKE '%youtu%' OR lower(s.orig_path) LIKE '%.mp4'"
+            " OR lower(s.orig_path) LIKE '%.webm' OR lower(s.orig_path) LIKE '%.mov' OR lower(s.orig_path) LIKE '%.mkv' OR lower(s.orig_path) LIKE '%.m4v')"
+            " AND EXISTS (SELECT 1 FROM source_speakers ss WHERE ss.source_id=s.id AND (ss.stills IS NULL OR ss.stills='[]'))")]
+        with db.tx(conn):
+            for sid in ids:
+                worker.enqueue(conn, sid, "stills", priority=-2, dedupe=True)
+        n_sp = conn.execute("SELECT COUNT(*) FROM source_speakers WHERE source_id IN (%s)" % (",".join(map(str, ids)) or "NULL")).fetchone()[0]
+        per = int(config.Settings(conn)["stills_per_speaker"])
+        return {"queued": len(ids), "estimated_mb": round(n_sp * per * stills.STILL_BYTES_ESTIMATE / 1e6, 1)}
+
     @app.post("/api/sources/{sid}/reprocess")
     def reprocess(sid: int, conn=Depends(get_conn)):
         if not db.row(conn, "SELECT id FROM sources WHERE id=? AND status!='deleted'", (sid,)):
@@ -602,6 +628,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         for c in clips:
             if c:
                 (config.CLIP_DIR / c).unlink(missing_ok=True)
+        stills.delete_stills(sid)
         return {"deleted": sid}
 
     # ---------------------------------------------------------------- jobs
@@ -1229,6 +1256,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     # ---------------------------------------------------------------- static
     config.ensure_dirs()
     app.mount("/clips", StaticFiles(directory=str(config.CLIP_DIR)), name="clips")
+    app.mount("/stills", StaticFiles(directory=str(stills.still_dir())), name="stills")
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     @app.get("/")

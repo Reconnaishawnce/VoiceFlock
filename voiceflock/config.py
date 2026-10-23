@@ -56,6 +56,11 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "help": "Chunk embeddings stored per speaker per recording (best quality first), plus the mean embedding."},
     "max_prints_per_person": {"default": 60, "type": "int", "group": "Quality",
         "label": "Max prints per person", "help": "Oldest auto-clustered prints are pruned beyond this."},
+    "stills_per_speaker": {"default": 3, "type": "int", "group": "Quality",
+        "label": "Video stills per speaker",
+        "help": "Low-res frames (about 15 KB each) at the speaker's longest turns, from uploaded videos or YouTube's preview storyboards. 3 stills × 30 speakers ≈ 1.4 MB per hearing. 0 disables."},
+    "still_width": {"default": 320, "type": "int", "group": "Quality",
+        "label": "Still width (px)", "help": "For frames cut from uploaded videos. YouTube storyboard tiles are whatever YouTube serves (≈160-320 px)."},
     "clip_seconds": {"default": 8.0, "type": "float", "group": "Quality",
         "label": "Preview clip length (s)", "help": "Length of the per-speaker preview clip shown in the UI."},
     # --- score normalisation / calibration ---

@@ -272,6 +272,14 @@ def process_source(conn: sqlite3.Connection, source_id: int, progress: Progress 
     progress("matching", 0.0)
     with db.tx(conn):
         write_speakers(conn, source_id, wav, results, settings, bool(source["incognito"]))
+    if not source["incognito"]:
+        try:
+            from .stills import make_stills_for_source
+            progress("stills", 0.0)
+            make_stills_for_source(conn, source_id, progress)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stills failed for source %s: %s", source_id, e)
+    with db.tx(conn):
         decide_and_record(conn, source, results, settings, gcache)
         summary = {
             "n_turns": len(turns),

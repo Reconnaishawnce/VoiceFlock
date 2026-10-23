@@ -136,7 +136,11 @@ one-click merge.
 e.g. Tailscale; plain http://ip from a phone can't open the mic).
 
 **Seeing who is talking.** A YouTube recording embeds the video; an uploaded video file plays the original;
-audio plays the converted wav. Clicking a block on the timeline, a timestamp chip, or *▶ watch longest turn*
+audio plays the converted wav. Each speaker also gets a few low-res **stills** (≈15 KB each) cut at their
+longest turns: from the file for uploaded videos, from YouTube's seek-bar storyboard sprites for YouTube
+recordings (no video download). They appear on the speaker card, on unnamed-voice cards and on profiles, and
+clicking one jumps the player there. Settings → *Video stills per speaker* (0 disables); *Make stills for
+existing recordings* backfills older ones. Clicking a block on the timeline, a timestamp chip, or *▶ watch longest turn*
 jumps the player there, so naming 25 senators from a hearing is a matter of reading the on-screen caption.
 
 **Timeline.** Each recording shows a colour-coded speaker timeline; click any block or timestamp chip to

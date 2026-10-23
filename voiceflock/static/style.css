@@ -99,3 +99,5 @@ details { border-top:1px solid var(--border); margin-top:12px; padding-top:8px; 
 
 .hi { display:flex; gap:10px; align-items:flex-start; padding:6px 0; } .hi > div { min-width:0; flex:1; }
 .thumb { width:128px; height:72px; object-fit:cover; border-radius:6px; cursor:pointer; flex:0 0 128px; background:#000; }
+
+.strip { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; } .strip .thumb { width:160px; height:90px; flex:0 0 160px; }
