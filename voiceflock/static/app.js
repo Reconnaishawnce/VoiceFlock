@@ -23,10 +23,18 @@ const mediaPlaying = () => $$("audio,video").some((a) => !a.paused && !a.ended) 
 
 /* ---------------- routing ---------------- */
 $$("#tabs button").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
-function go(route) { if (location.hash !== "#" + route) location.hash = route; else render(); }
+function go(route) { STATE.navDepth = (STATE.navDepth || 0) + 1; if (location.hash !== "#" + route) location.hash = route; else render(); }
+function restoreScroll() { const y = SCROLL[location.hash || "#home"]; if (y != null) requestAnimationFrame(() => window.scrollTo(0, y)); }
+const SCROLL = {};
+window.addEventListener("scroll", () => { SCROLL[location.hash || "#home"] = window.scrollY; }, { passive: true });
+function back(fallback) { if (history.length > 1 && document.referrer !== "" || STATE.navDepth > 0) { STATE.navDepth = Math.max(0, (STATE.navDepth || 0) - 1); history.back(); } else go(fallback); }
 function render() {
+  if (STATE.lastHash !== location.hash) closeDrawer();
+  STATE.lastHash = location.hash;
   const [path, qs] = (location.hash.replace("#", "") || "home").split("?");
-  STATE.seekTo = qs && /^t=/.test(qs) ? Number(qs.slice(2)) : null;
+  const params = Object.fromEntries((qs || "").split("&").filter(Boolean).map((kv) => kv.split("=")));
+  STATE.seekTo = params.t != null ? Number(params.t) : null;
+  if (params.view) STATE.peopleView = params.view;
   const [tab, id] = path.split("/");
   STATE.tab = $(`#tab-${tab}`) ? tab : "home";
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === STATE.tab));
@@ -230,19 +238,23 @@ async function loadLibrary() {
   try {
     const qs = encodeURIComponent($("#source-search").value.trim());
     const [j, q] = await Promise.all([api(`/api/sources?limit=300&q=${qs}`), api("/api/jobs?limit=60")]);
-    const active = q.jobs.filter((x) => x.status === "running" || x.status === "queued" || x.status === "failed");
+    const active = q.jobs.filter((x) => x.status === "running" || x.status === "queued");
+    const failed = q.jobs.filter((x) => x.status === "failed");
     const label = (x) => x.type === "process_source" ? `<a class="link" onclick="openSource(${x.source_id})">${esc(x.source_name || "#" + x.source_id)}</a>` : `<b>${esc(x.type)}</b>`;
-    $("#jobs").innerHTML = active.length ? active.slice(0, 20).map((x) => `<div class="jobrow"><span class="pill ${x.status}">${x.status}</span>${label(x)}
-      ${x.status === "running" ? `<span class="muted">${esc(x.stage || "")} ${Math.round(x.progress)}% · ${elapsed(x.started_at)} · updated ${elapsed(x.heartbeat_at) || "-"} ago</span><div class="bar"><i style="width:${x.progress}%"></i></div><button class="small" onclick="cancelJob(${x.id})">stop</button>` : ""}
-      ${x.status === "queued" ? `<button class="small" onclick="cancelJob(${x.id})">cancel</button>` : ""}
-      ${x.status === "failed" ? `<span class="warnbox" style="margin:0">${esc(x.error)}</span>${x.type === "process_source" ? `<button class="small" onclick="retryJob(${x.id})">retry</button>` : ""}<button class="small" onclick="dismissJob(${x.id})">dismiss</button>${x.log ? `<details style="margin:0;padding:0;border:0"><summary>details</summary><pre class="muted" style="font-size:11px;white-space:pre-wrap">${esc(x.log.slice(-1500))}</pre></details>` : ""}` : ""}
-      </div>`).join("") + (active.length > 1 ? `<div class="actions"><button class="small" onclick="clearJobs()">Clear finished</button></div>` : "") : "";
-    $("#sources").innerHTML = j.sources.length ? `<table><tr><th>Recording</th><th>Status</th><th>Length</th><th>Voices</th><th></th></tr>` + j.sources.map((s) => `<tr>
-      <td><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a>${s.incognito ? '<span class="pill">identify only</span>' : ""}${s.mode === "enroll" ? '<span class="pill">enroll</span>' : ""}</td>
+    $("#jobs").innerHTML = active.slice(0, 20).map((x) => `<div class="jobrow"><span class="pill ${x.status}">${x.status}</span>${label(x)}
+      ${x.status === "running" ? `<span class="muted">${esc(x.stage || "")} ${Math.round(x.progress)}% · ${elapsed(x.started_at)} · updated ${elapsed(x.heartbeat_at) || "-"} ago</span><div class="bar"><i style="width:${x.progress}%"></i></div><button class="small" onclick="cancelJob(${x.id})">stop</button>` : `<button class="small" onclick="cancelJob(${x.id})">cancel</button>`}</div>`).join("");
+    $("#problems-box").classList.toggle("hidden", !failed.length); $("#problems-count").textContent = failed.length ? `(${failed.length})` : "";
+    $("#problems").innerHTML = failed.map((x) => `<div class="jobrow"><span class="pill failed">failed</span>${label(x)}<span class="muted" style="flex:1">${esc(x.error)}</span>${x.type === "process_source" ? `<button class="small" onclick="retryJob(${x.id})">retry</button>` : ""}<button class="small" onclick="dismissJob(${x.id})">dismiss</button>${x.log ? `<details style="margin:0;padding:0;border:0"><summary>details</summary><pre class="muted" style="font-size:11px;white-space:pre-wrap">${esc(x.log.slice(-1500))}</pre></details>` : ""}</div>`).join("") + (failed.length > 1 ? `<div class="actions"><button class="small" onclick="clearJobs()">Dismiss all</button></div>` : "");
+    const okSources = j.sources.filter((s) => s.status !== "failed" || s.n_speakers);
+    const failedSources = j.sources.filter((s) => s.status === "failed" && !s.n_speakers);
+    if (failedSources.length) { $("#problems-box").classList.remove("hidden"); $("#problems-count").textContent = `(${failed.length + failedSources.length})`; $("#problems").innerHTML += failedSources.map((s) => `<div class="jobrow"><span class="pill failed">failed</span><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a><span class="muted" style="flex:1">${esc(s.error || "")}</span><button class="small" onclick="reprocess(${s.id})">retry</button><button class="small danger" onclick="deleteSource(${s.id})">delete</button></div>`).join(""); }
+    $("#sources").innerHTML = okSources.length ? `<table><tr><th>Recording</th><th>Status</th><th>Length</th><th>Voices</th><th></th></tr>` + okSources.map((s) => `<tr>
+      <td><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a>${s.incognito ? '<span class="pill">identify only</span>' : ""}${s.mode === "enroll" ? '<span class="pill">enroll</span>' : ""}${s.review ? '<span class="pill provisional">review</span>' : ""}</td>
       <td><span class="pill ${s.status}">${s.status}</span>${s.job && s.job.status === "running" ? ` <span class="muted">${Math.round(s.job.progress)}%</span>` : ""}</td>
       <td>${s.duration_s ? fmtT(s.duration_s) : ""}</td>
-      <td class="sub">${s.speakers.map((sp) => sp.person_name ? `<span class="pill ${sp.person_kind}">${esc(sp.person_name)}</span>` : sp.top_name ? `<span class="muted">${esc(sp.label)}≈${esc(sp.top_name)} ${pct(sp.top_prob)}</span>` : `<span class="muted">${esc(sp.label)}</span>`).join(" ")}</td>
+      <td class="sub">${(() => { const named = s.speakers.filter((sp) => sp.person_kind === "named"); const un = s.speakers.length - named.length; return named.slice(0, 8).map((sp) => `<span class="pill named">${esc(sp.person_name)}</span>`).join(" ") + (named.length > 8 ? ` <span class="muted">+${named.length - 8}</span>` : "") + (un ? ` <span class="muted">${un} unnamed</span>` : ""); })()}</td>
       <td><button class="small danger" onclick="deleteSource(${s.id})">✕</button></td></tr>`).join("") + `</table>` : '<p class="muted">No recordings yet. Drop a file above.</p>';
+    restoreScroll();
   } catch (e) { onErr(e); }
 }
 $("#source-search").addEventListener("input", () => { clearTimeout(STATE._st); STATE._st = setTimeout(loadLibrary, 250); });
@@ -261,11 +273,13 @@ async function loadSourceDetail(id) {
     const el = $("#lib-detail");
     if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
     el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]);
-    el.innerHTML = `<button class="back" onclick="go('library')">← Library</button><div class="card">${sourceView(src)}</div>`;
+    const openId = !$("#drawer").classList.contains("hidden") && STATE.src?.id === src.id ? Number(($("#drawer #nm-" ) || {}).id) : null;
+    el.innerHTML = `<button class="back" onclick="back('library')">← Back</button><div class="card">${sourceView(src)}</div>`;
+    STATE.src = src;
     const cue = STATE.seekTo; STATE.seekTo = null;
     if (src.media_kind === "youtube") {
       await loadYT();
-      YTP = new YT.Player(`yt-${src.id}`, { videoId: src.youtube_id, playerVars: { rel: 0, modestbranding: 1, start: cue != null ? Math.floor(cue) : undefined }, events: { onReady: () => { if (cue != null) { YTP.seekTo(cue, true); YTP.playVideo(); } }, onStateChange: (e) => {
+      YTP = new YT.Player(`yt-${src.id}`, { videoId: src.youtube_id, playerVars: { rel: 0, modestbranding: 1, playsinline: 1, start: cue != null ? Math.floor(cue) : undefined }, events: { onReady: () => { if (cue != null) { YTP.mute(); YTP.seekTo(cue, true); YTP.playVideo(); showUnmute(src.id, cue); } }, onStateChange: (e) => {
         clearInterval(YT_TICK); if (e.data === 1) YT_TICK = setInterval(() => { const c = $(`#tl-${src.id} .cursor`); if (c && src.duration_s) c.style.left = (YTP.getCurrentTime() / src.duration_s) * 100 + "%"; }, 500); } } });
     } else { YTP = null; if (cue != null) setTimeout(() => seek(src.id, cue), 150); }
     if (cue != null) $("#lib-detail .player")?.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -282,8 +296,10 @@ function sourceView(src) {
   return `<div class="hdr"><h2>${esc(src.name)} ${st}</h2>
     <div class="q">${src.duration_s ? fmtT(src.duration_s) : ""} · ${src.n_speakers ?? "?"} voices · added ${esc((src.created_at || "").slice(0, 16).replace("T", " "))}${src.url ? ` · <a class="link" href="${esc(src.url)}" target="_blank">source ↗</a>` : ""}</div></div>${job}${err}
     ${player}${timeline(src)}
-    <p class="muted" style="font-size:12px">Click a block on the timeline, a timestamp chip, or <b>▶ watch longest turn</b> to jump the player there and see who is talking.</p>
+    <p class="muted" style="font-size:12px">Click a voice in the legend or a block on the timeline: the player jumps to them and a panel opens to name them, without leaving the video.${src.stills_info ? ` · stills: ${src.stills_info.kind === "error" || src.stills_info.kind === "none" ? `<span style="color:var(--warn)">${esc(src.stills_info.error || "none")}</span>` : `${src.stills_info.stills} from ${src.stills_info.kind}`}` : ""}</p>
+    <div class="inline" style="align-items:flex-start"><textarea class="notes" id="src-notes" placeholder="Notes for this recording: context, date, who was present, links… (saved when you click away)" onblur="saveSourceNotes(${src.id}, this.value)">${esc(src.notes || "")}</textarea></div>
     <div class="actions">
+      ${src.status === "done" && !src.incognito ? `<button class="small primary" onclick="queueReview(${src.id})" title="Put every unnamed voice of this recording in the review queue">${src.review_pending ? `Review queue: ${src.review_pending} to do` : "Add voices to review queue"}</button>` : ""}
       ${src.incognito ? "" : `<button class="small" onclick="forgetSource(${src.id})" title="Remove everything this recording added to the library">Forget voices from this file</button>`}
       ${src.status === "done" && !src.incognito ? `<button class="small" onclick="makeStills(${src.id})" title="Cut low-res frames at each speaker's longest turns">${(src.speakers || []).some((x) => (x.stills || []).length) ? "Redo stills" : "Make stills"}</button>` : ""}
       <button class="small" onclick="reprocess(${src.id})">Reprocess</button>
@@ -294,13 +310,43 @@ function sourceView(src) {
 function timeline(src) {
   if (!src.duration_s || !(src.speakers || []).length) return "";
   const d = src.duration_s;
-  const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s});focusSpeaker(${sp.id})"></div>`).join("")).join("");
-  const legend = src.speakers.map((sp, i) => `<span class="link" onclick="focusSpeaker(${sp.id})" title="scroll to this voice"><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}</span>`).join("");
+  const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s});openSpeaker(${sp.id})"></div>`).join("")).join("");
+  const legend = src.speakers.map((sp, i) => `<span class="link" onclick="openSpeaker(${sp.id}, true)" title="play this voice and open its panel"><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}</span>`).join("");
   return `<div class="timeline" id="tl-${src.id}" onclick="seekFrac(${src.id}, event)">${segs}<div class="cursor" style="left:0"></div></div><div class="tl-legend">${legend}</div>`;
 }
+/* ---------------- side panel for one voice ---------------- */
+function openSpeaker(id, play = false) {
+  const src = STATE.src; const sp = (src?.speakers || []).find((x) => x.id === id); if (!sp) return;
+  if (play && sp.longest) seek(src.id, sp.longest.start_s);
+  $("#drawer-title").innerHTML = `${esc(sp.label)} <span class="muted">· ${fmtT(sp.speech_seconds)} of speech</span>`;
+  const top = sp.candidates[0]; const thr = Number(SETTINGS.match_threshold || 0.75);
+  const who = sp.person ? `<a class="link" onclick="openPerson(${sp.person.id})"><b>${esc(sp.person.name)}</b></a> <span class="pill ${sp.person.kind}">${sp.person.kind === "named" ? "known" : "unnamed"}</span>` : top && top.probability >= thr && top.person_kind === "named" ? `probably <a class="link" onclick="openPerson(${top.person_id})"><b>${esc(top.person_name)}</b></a>` : `<b>Unknown</b>`;
+  $("#drawer-body").innerHTML = `
+    <div style="margin-bottom:8px">${who}${sp.review_status === "pending" ? ' <span class="pill provisional">to review</span>' : ""}</div>
+    <div class="actions">${sp.longest ? `<button class="small primary" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ play longest turn (${fmtT(sp.longest.start_s)}, ${sp.longest.seconds}s)</button>` : ""}</div>
+    <div class="chips" style="margin:6px 0">${(sp.segments || []).slice(0, 14).map((g) => `<button onclick="seek(${src.id}, ${g.start_s})">${fmtT(g.start_s)}</button>`).join("")}${sp.segments.length > 14 ? `<span class="muted">+${sp.segments.length - 14}</span>` : ""}</div>
+    ${(sp.stills || []).length ? `<div class="strip">${sp.stills.map((x) => `<img class="thumb" loading="lazy" src="${esc(x.url)}" title="jump to ${fmtT(x.t)}" onclick="seek(${src.id}, ${x.t})">`).join("")}</div>` : ""}
+    ${sp.clip_url ? clip(sp.clip_url) : ""}
+    <div class="inline" style="margin:8px 0"><input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id})"><button class="small primary" onclick="nameSpeaker(${sp.id})">${sp.person ? "Name" : "Add"}</button></div>
+    <div class="actions">${sp.person ? `<button class="small" onclick="openPerson(${sp.person.id})">Open profile · other clips</button><button class="small" onclick="unassign(${sp.id})">Not them / undo</button>` : ""}
+      ${sp.review_status === "pending" ? `<button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip for now</button><button class="small" onclick="setReview(${sp.id}, 'done')">Mark done</button>` : `<button class="small" onclick="setReview(${sp.id}, 'pending')">Add to review queue</button>`}</div>
+    <textarea class="notes" placeholder="Notes about this voice (context, guesses, links…)" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea>
+    <h3>Candidates</h3><div id="cands-${sp.id}">${candidateTable(sp)}</div>`;
+  $("#drawer").classList.remove("hidden"); document.body.classList.add("drawer-open");
+  setTimeout(() => $(`#drawer #nm-${sp.id}`)?.focus(), 250);
+}
+function closeDrawer() { $("#drawer")?.classList.add("hidden"); document.body.classList.remove("drawer-open"); }
+async function saveSourceNotes(id, v) { try { await api(`/api/sources/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
+async function saveSpeakerNotes(id, v) { try { await api(`/api/speakers/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
+async function setReview(id, status) { try { await api(`/api/speakers/${id}`, { method: "PATCH", body: { review_status: status } }); toast(status === "pending" ? "Added to review queue" : status === "done" ? "Done" : "Skipped"); render(); loadStats(); } catch (e) { onErr(e); } }
+async function queueReview(id) { try { const r = await api(`/api/sources/${id}/review`, { method: "POST" }); toast(r.queued ? `${r.queued} voice(s) added to the review queue` : "Nothing left to review here"); render(); loadStats(); } catch (e) { onErr(e); } }
 function focusSpeaker(id) { const el = $(`#spk-${id}`); if (!el) return; el.scrollIntoView({ block: "start", behavior: "smooth" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600); }
+function showUnmute(sid, t) {
+  const wrap = $(`#yt-${sid}`)?.parentElement; if (!wrap) return; wrap.classList.add("ytwrap");
+  if (!$(".unmute", wrap)) { const b = document.createElement("button"); b.className = "unmute"; b.textContent = `🔊 Playing from ${fmtT(t)} muted (browser rule) · click for sound`; b.onclick = () => { YTP.unMute(); YTP.playVideo(); b.remove(); }; wrap.appendChild(b); }
+}
 function seek(sid, t) {
-  if (YTP && YTP.seekTo) { YTP.seekTo(t, true); YTP.playVideo(); $(`#yt-${sid}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }); return; }
+  if (YTP && YTP.seekTo) { YTP.seekTo(t, true); YTP.unMute(); YTP.playVideo(); $(".unmute")?.remove(); $(`#yt-${sid}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }); return; }
   const a = $(`#aud-${sid}`); if (!a) return;
   const doSeek = () => { a.currentTime = Math.min(t, a.duration || t); a.play().catch(() => {}); };
   if (a.readyState >= 1) doSeek(); else { a.addEventListener("loadedmetadata", doSeek, { once: true }); a.load(); }
@@ -316,19 +362,24 @@ function qualityWarning(sp) {
   if ((sp.clip_fraction || 0) > 0.01) w.push("clipping");
   return w.length ? `<div class="warnbox">Low-confidence clip (${w.join(", ")}).</div>` : "";
 }
-function candidateTable(sp) {
-  const thr = Number(SETTINGS.match_threshold || 0.75), hi = Number(SETTINGS.confirm_threshold || 0.9);
+function candidateTable(sp, showAll = false) {
+  const thr = Number(SETTINGS.match_threshold || 0.75), hi = Number(SETTINGS.confirm_threshold || 0.9), minp = Number(SETTINGS.candidate_min_prob ?? 0.5);
   if (!sp.candidates.length) return `<div class="muted">No candidates yet (nobody in the library to compare with).</div>`;
+  const strong = sp.candidates.filter((c) => c.probability >= minp || c.status === "confirmed");
+  const list = showAll ? sp.candidates : strong;
+  const weakNote = !showAll && strong.length < sp.candidates.length ? `<div class="muted" style="font-size:12px;margin:4px 0">${strong.length ? "" : `No candidate above ${pct(minp)}: this is probably someone new. `}<a class="link" onclick="toggleWeak(${sp.id})">show ${sp.candidates.length - strong.length} weaker candidate(s)</a></div>` : "";
+  if (!list.length) return weakNote;
   return `<table><tr><th>#</th><th>Candidate</th><th>Probability</th><th>Margin</th><th>Heard in</th><th></th></tr>` +
-    sp.candidates.map((c) => {
+    list.map((c) => {
       const act = c.status === "confirmed" ? `<span class="pill named">confirmed</span> <button class="small" onclick="unassign(${sp.id})">undo</button>`
         : c.status === "rejected" ? `<span class="pill">rejected</span>`
         : `<button class="small primary" onclick="confirmMatch(${c.id}, ${c.probability})">Confirm</button> <button class="small" onclick="rejectMatch(${c.id})">Reject</button>`;
       return `<tr><td>${c.rank}</td><td><a class="link" onclick="openPerson(${c.person_id})">${esc(c.person_name)}</a><span class="pill ${c.person_kind}">${c.person_kind === "named" ? "known" : "unnamed"}</span>${sp.person_id === c.person_id ? '<span class="pill named">assigned</span>' : ""}</td>
         <td><span class="prob ${probCls(c.probability, thr, hi)}">${pct(c.probability)}</span><div class="pbar"><i style="width:${pct(c.probability)}"></i></div></td>
         <td>${c.rank === 1 ? "+" + pct(c.margin) : ""}</td><td class="sub">${heardIn(c.heard_in)}</td><td>${act}</td></tr>`;
-    }).join("") + `</table>`;
+    }).join("") + `</table>` + weakNote;
 }
+function toggleWeak(id) { const holder = $(`#cands-${id}`); const sp = (STATE.src?.speakers || []).concat(STATE.reviewItems || []).find((x) => x.id === id); if (!holder || !sp) return; holder.dataset.all = holder.dataset.all ? "" : "1"; holder.innerHTML = candidateTable(sp, !!holder.dataset.all); }
 function speakerCard(sp, src, idx = 0) {
   const color = COLORS[idx % COLORS.length];
   const thr = Number(src.settings?.match_threshold ?? SETTINGS.match_threshold ?? 0.75);
@@ -342,13 +393,13 @@ function speakerCard(sp, src, idx = 0) {
   const lg = sp.longest ? `<button class="small" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ watch longest turn (${fmtT(sp.longest.start_s)}, ${sp.longest.seconds}s)</button>` : "";
   const chips = (sp.segments || []).slice(0, 10).map((g) => `<button onclick="seek(${src.id}, ${g.start_s})">${fmtT(g.start_s)}</button>`).join("");
   return `<div class="spk" id="spk-${sp.id}" style="border-left:3px solid ${color}">
-    <div class="hdr"><div><span class="title">${esc(sp.label)}</span> · ${verdict}</div>
+    <div class="hdr"><div><span class="title" onclick="openSpeaker(${sp.id})" title="open in the side panel">${esc(sp.label)}</span> · ${verdict}${sp.review_status === "pending" ? ' <span class="pill provisional">to review</span>' : ""}</div>
       <div class="q">speech <b>${fmtT(sp.speech_seconds)}</b> · quality <b>${sp.quality_score?.toFixed(0) ?? "-"}</b> · SNR <b>${sp.snr_db?.toFixed(0) ?? "-"} dB</b> · ${sp.n_segments} turns</div></div>
     <div class="actions" style="margin:6px 0">${lg}<div class="chips">${chips}${sp.segments.length > 10 ? `<span class="muted">+${sp.segments.length - 10}</span>` : ""}</div></div>
     ${(sp.stills || []).length ? `<div class="strip">${sp.stills.map((x) => `<img class="thumb" loading="lazy" src="${esc(x.url)}" title="jump to ${fmtT(x.t)}" onclick="seek(${src.id}, ${x.t})">`).join("")}</div>` : ""}
     ${sp.clip_url ? `<div class="turn">preview clip (best ${SETTINGS.clip_seconds || 8} s of this voice)</div>${clip(sp.clip_url)}` : ""}
     ${qualityWarning(sp)}
-    ${candidateTable(sp)}
+    <div id="cands-${sp.id}">${candidateTable(sp)}</div>
     <div class="actions">
       <input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" style="max-width:260px">
       <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id})">${sp.person ? "Name" : "Add to library"}</button>
@@ -417,7 +468,7 @@ async function toggleFeed(id, enabled) { try { await api(`/api/feeds/${id}`, { m
 async function deleteFeed(id) { if (!confirm("Stop watching this feed?")) return; try { await api(`/api/feeds/${id}`, { method: "DELETE" }); loadFeeds(); } catch (e) { onErr(e); } }
 
 /* ---------------- PEOPLE ---------------- */
-$$("#people-seg button").forEach((b) => b.addEventListener("click", () => { STATE.peopleView = b.dataset.view; loadPeople(); }));
+$$("#people-seg button").forEach((b) => b.addEventListener("click", () => { STATE.peopleView = b.dataset.view; history.replaceState(null, "", `#people?view=${b.dataset.view}`); loadPeople(); }));
 $("#person-search").addEventListener("input", () => { clearTimeout(STATE._ps); STATE._ps = setTimeout(loadPeople, 200); });
 $("#btn-new-person").onclick = () => { $("#identify-box").open = true; $("#identify-name").focus(); };
 async function loadNames() {
@@ -435,7 +486,7 @@ async function loadGroupDetail(gid) {
   try {
     const g = await api(`/api/groups/${gid}`); const named = await loadNames();
     const el = $("#people-detail");
-    el.innerHTML = `<button class="back" onclick="go('people')">← People</button>
+    el.innerHTML = `<button class="back" onclick="back('people')">← Back</button>
       <div class="card">
         <div class="profile"><div><h2>📦 ${esc(g.name)} <span class="muted" style="font-size:14px">${g.n} voices</span></h2><div class="meta">${g.description ? esc(g.description) + " · " : ""}<a class="link" href="/api/groups/${g.id}/export">download package file</a> · <a class="link" onclick="renameGroup(${g.id})">rename</a> · <a class="link" onclick="deleteGroup(${g.id})">delete package</a></div></div></div>
         <h3>Alert for everyone in this package</h3>
@@ -466,16 +517,28 @@ async function loadPeople() {
   if (STATE.personId) { $("#people-list").classList.add("hidden"); $("#people-detail").classList.remove("hidden"); return loadPersonDetail(STATE.personId); }
   $("#people-detail").classList.add("hidden"); $("#people-list").classList.remove("hidden");
   $$("#people-seg button").forEach((b) => b.classList.toggle("active", b.dataset.view === STATE.peopleView));
+  api("/api/stats").then((st) => { $$("#people-seg button")[0].textContent = `To review (${st.review_pending})`; }).catch(() => {});
   const q = $("#person-search").value.trim().toLowerCase(); const el = $("#people-content");
   try {
-    if (STATE.peopleView === "known") {
+    if (STATE.peopleView === "review") {
+      const j = await api("/api/review?limit=40"); STATE.reviewItems = j.items; await loadNames();
+      $$("#people-seg button")[0].textContent = `To review (${j.total})`;
+      el.innerHTML = j.items.length ? `<p class="muted">Voices you asked to label. Watch, type a name (Enter saves), or skip. Naming or confirming removes the item.</p>` + j.items.map((sp) => {
+        const h = { id: sp.source.id, name: sp.source.name, youtube_id: sp.source.youtube_id, media_kind: sp.source.media_kind, watch_at: sp.longest?.start_s ?? sp.first_start_s, first_start_s: sp.first_start_s, still_url: sp.stills?.[0]?.url, speech_seconds: sp.speech_seconds };
+        return `<div class="review-item">${thumb(h) || '<div class="thumb"></div>'}<div>
+          <div><a class="link" onclick="openSourceAt(${sp.source.id}, ${h.watch_at || 0})"><b>${esc(sp.source.name)}</b></a> <span class="muted">· ${esc(sp.label)} · ${fmtT(sp.speech_seconds)} of speech${sp.source.notes ? " · " + esc(sp.source.notes.slice(0, 80)) : ""}</span></div>
+          <div class="actions" style="margin:4px 0">${watchBtn(h)}${sp.clip_url ? clip(sp.clip_url) : ""}</div>
+          <div id="cands-${sp.id}">${candidateTable(sp)}</div>
+          <div class="inline" style="margin:6px 0"><input placeholder="Who is this? Type a name…" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id})"><button class="small primary" onclick="nameSpeaker(${sp.id})">Add</button><button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip</button></div>
+          <textarea class="notes" placeholder="Notes about this voice" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea></div></div>`; }).join("") : `<p class="muted">Nothing to review. Upload a recording with the <b>Review</b> intent, or open a recording and press <b>Add voices to review queue</b>.</p>`;
+    } else if (STATE.peopleView === "known") {
       const named = await loadNames();
-      $$("#people-seg button")[0].textContent = `Known (${named.length})`;
+      $$("#people-seg button")[1].textContent = `Known (${named.length})`;
       el.innerHTML = named.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item" style="display:flex;gap:10px;align-items:center">${glyphSvg(p.glyph)}<div style="flex:1"><a class="link" onclick="openPerson(${p.id})"><b>${esc(p.name)}</b></a>${bell(p)}
         <div class="muted" style="font-size:12px">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints</div></div><button class="small" onclick="openPerson(${p.id})">Open</button></div>`).join("") || `<p class="muted">No known people yet. Name an unnamed voice, or identify someone from reference audio.</p>`;
     } else if (STATE.peopleView === "unnamed") {
       const [u, named] = await Promise.all([api("/api/voices/unnamed"), loadNames()]);
-      $$("#people-seg button")[1].textContent = `Unnamed voices (${u.voices.length})`;
+      $$("#people-seg button")[2].textContent = `Unnamed voices (${u.voices.length})`;
       const mergeOpts = (self) => `<option value="">Merge into…</option>` + u.voices.filter((v) => v.id !== self).map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("") + named.map((p) => `<option value="${p.id}">${esc(p.name)} (known)</option>`).join("");
       el.innerHTML = `<p class="muted">Background data, most-heard first. Open one to watch where it was heard; <b>Name</b> it if you know who it is; <b>Keep</b> tracks it as a known voice without a name.</p><div class="grid">` + u.voices.filter((v) => v.name.toLowerCase().includes(q)).map((v) => `<div class="vcard">
         <div class="nm"><a class="link" onclick="openPerson(${v.id})">${esc(v.name)}</a>${bell(v)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
@@ -484,7 +547,7 @@ async function loadPeople() {
         <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || `<p class="muted">No unnamed voices yet.</p>`;
     } else if (STATE.peopleView === "packages") {
       const j = await api("/api/groups"); ALLGROUPS = j.groups;
-      $$("#people-seg button")[2].textContent = `Packages (${j.groups.length})`;
+      $$("#people-seg button")[3].textContent = `Packages (${j.groups.length})`;
       el.innerHTML = `<p class="muted">A package is a set of voices with one alert setting: flag 500 politicians at once, give them all the same alarm and line, download or share them as one file.</p>
         <div class="inline" style="max-width:520px"><input id="newpkg" placeholder="New package name, e.g. Politicians"><button class="small primary" onclick="createGroup()">Create</button><label class="link" style="align-self:center;white-space:nowrap">import package<input type="file" id="import-pkg" accept="application/json" hidden></label></div>
         ${j.groups.map((g) => `<div class="item" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -495,7 +558,7 @@ async function loadPeople() {
       $("#import-pkg").addEventListener("change", importPackage);
     } else {
       const j = await api("/api/voices/merge_suggestions");
-      $$("#people-seg button")[3].textContent = `Possible duplicates (${j.pairs.length})`;
+      $$("#people-seg button")[4].textContent = `Possible duplicates (${j.pairs.length})`;
       el.innerHTML = j.pairs.length ? `<p class="muted">Different mics or rooms can split one person into several entries. Listen to both, then merge.</p>` + j.pairs.map((p) => `<div class="item"><div class="title"><a class="link" onclick="openPerson(${p.a.id})">${esc(p.a.name)}</a><span class="pill ${p.a.kind}">${p.a.kind === "named" ? "known" : "unnamed"}</span> ≈ <a class="link" onclick="openPerson(${p.b.id})">${esc(p.b.name)}</a><span class="pill ${p.b.kind}">${p.b.kind === "named" ? "known" : "unnamed"}</span> <span class="prob hi">${pct(p.probability)}</span></div>
         <div class="row" style="margin:4px 0 0">${[p.a, p.b].map((x) => `<div class="col">${clip(x.heard_in[0]?.clip_url) || '<span class="muted">no clip</span>'}</div>`).join("")}</div>
         <div class="actions"><button class="small primary" onclick="mergeInto(${p.a.kind === "named" ? p.b.id : p.a.id}, ${p.a.kind === "named" ? p.a.id : p.b.id})">Merge into ${esc(p.a.kind === "named" ? p.a.name : p.b.name)}</button>${p.a.kind !== "named" && p.b.kind !== "named" ? ` <button class="small" onclick="mergeInto(${p.b.id}, ${p.a.id})">Merge into ${esc(p.a.name)}</button>` : ""}</div></div>`).join("") : `<p class="muted">No likely duplicates right now.</p>`;
@@ -510,6 +573,7 @@ async function mergePerson(id) { const into = $(`#mg-${id}`).value; if (!into) r
 async function mergeInto(fromId, intoId) { if (!confirm("Merge? Prints and recordings move over; the other entry is deleted.")) return; try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); render(); loadStats(); } catch (e) { onErr(e); } }
 async function deletePerson(id) { if (!confirm("Delete this voice and all its prints?")) return; try { await api(`/api/persons/${id}`, { method: "DELETE" }); toast("Deleted"); go("people"); loadStats(); } catch (e) { onErr(e); } }
 async function acceptPerson(id) { try { const p = await api(`/api/persons/${id}/accept`, { method: "POST" }); toast(`Kept as ${p.name}`); render(); loadStats(); } catch (e) { onErr(e); } }
+async function savePersonNotes(id, v) { try { await api(`/api/persons/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
 async function addToGroup(pid) {
   let gid = $(`#addg-${pid}`).value; if (!gid) return;
   try {
@@ -526,7 +590,7 @@ async function loadPersonDetail(id) {
   try {
     const [p, gj] = await Promise.all([api(`/api/persons/${id}`), api("/api/groups")]); ALLGROUPS = gj.groups;
     const el = $("#people-detail");
-    el.innerHTML = `<button class="back" onclick="go('people')">← People</button>
+    el.innerHTML = `<button class="back" onclick="back('people')">← Back</button>
       <div class="card">
         <div class="profile">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 56)}
           <div><h2>${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span>${bell(p)}</h2>
@@ -543,6 +607,7 @@ async function loadPersonDetail(id) {
             <button class="small primary" onclick="saveAlertSettings(${p.id})">Save</button><button class="small" onclick="testAlert(${p.id})">▶ Test</button></div>
           <div class="sub">Will say: “${esc(p.spoken)}”. <code>[NAME]</code> = ${esc(p.name)}; empty = default from Settings.</div>
         </details>
+        <textarea class="notes" placeholder="Notes about this person (role, context, links…)" onblur="savePersonNotes(${p.id}, this.value)">${esc(p.notes || "")}</textarea>
         <h3>Heard in ${p.heard_in.length} recordings</h3>
         ${p.heard_in.map((h) => `<div class="appear"><div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})"><b>${esc(h.name)}</b></a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech · <span class="pill">${esc(h.assignment)}</span></span>${clip(h.clip_url)}</div></div>
           <div class="actions">${watchBtn(h)}<button class="small" onclick="unassign(${h.speaker_id})" title="This recording is not them">Not them</button></div></div>`).join("") || '<p class="muted">No recordings yet (enrolled from the command line or imported).</p>'}
@@ -628,16 +693,23 @@ $("#btn-live").onclick = async () => {
       const raw = e.inputBuffer.getChannelData(0); const inp = new Float32Array(carry.length + raw.length); inp.set(carry); inp.set(raw, carry.length);
       const n = Math.floor(inp.length / ratio); const out = new Int16Array(n); let peak = 0;
       for (let i = 0; i < n; i++) { const a = i * ratio, b = (i + 1) * ratio; let acc = 0, cnt = 0; for (let j = Math.floor(a); j < Math.min(inp.length, Math.ceil(b)); j++) { acc += inp[j]; cnt++; } const v = Math.max(-1, Math.min(1, cnt ? acc / cnt : 0)); out[i] = v * 32767; peak = Math.max(peak, Math.abs(v)); }
-      carry = inp.slice(Math.floor(n * ratio)); $("#live-level").style.width = Math.min(100, peak * 140) + "%"; ws.send(out.buffer);
+      carry = inp.slice(Math.floor(n * ratio)); $("#live-level").style.width = Math.min(100, peak * 140) + "%"; LIVE.sent += out.byteLength; ws.send(out.buffer);
     };
     src.connect(proc); proc.connect(ac.destination);
-    LIVE = { stream, ac, proc, ws, lastAlert: 0, log: [] };
-    $("#btn-live").textContent = "⏹ Stop listening"; st.textContent = "connecting…";
-    ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === "status") { st.textContent = m.text; return; } if (m.type === "error") { st.textContent = m.text; stopLive(); return; } renderLive(m); };
-    ws.onclose = () => { if (LIVE) { st.textContent = "connection closed"; stopLive(); } };
-  } catch (e) { st.textContent = "microphone blocked: " + e.message; }
+    LIVE = { stream, ac, proc, ws, lastAlert: 0, log: [], frames: 0, sent: 0 };
+    $("#btn-live").textContent = "⏹ Stop listening"; st.textContent = `connecting… (mic ${ac.sampleRate} Hz)`;
+    $("#live-now").innerHTML = `<div class="muted">starting: connecting to the server…</div>`;
+    ws.onopen = () => { st.textContent = "connected · loading model…"; $("#live-now").innerHTML = `<div class="muted">connected · waiting for the first audio frame…</div>`; };
+    ws.onerror = () => { st.textContent = "websocket error (is the page served by VoiceFlock itself?)"; };
+    ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === "status") { st.textContent = m.text; return; } if (m.type === "error") { st.textContent = m.text; $("#live-now").innerHTML = `<div class="warnbox">${esc(m.text)}</div>`; stopLive(); return; } LIVE.frames++; renderLive(m); };
+    ws.onclose = (e) => { if (LIVE) { st.textContent = `connection closed (${e.code}) after ${LIVE.frames} frames`; stopLive(); } };
+    LIVE.watchdog = setTimeout(() => { if (LIVE && LIVE.frames === 0) { $("#live-now").innerHTML = `<div class="warnbox">No results after 10 s. Sent ${Math.round(LIVE.sent / 32000)} s of audio, socket state ${ws.readyState}. ${LIVE.sent === 0 ? "The microphone is not delivering samples: check the browser's mic permission for this site, or that another app isn't holding the mic." : "The server is not answering: check the VoiceFlock window for errors (model download on first use can take a minute)."}</div>`; } }, 10000);
+  } catch (e) {
+    st.textContent = "microphone blocked: " + e.message;
+    $("#live-now").innerHTML = `<div class="warnbox"><b>Could not open the microphone:</b> ${esc(e.message)}.<br>${/not found/i.test(e.message) ? "No microphone is available to the browser: check Windows Settings → Privacy → Microphone (allow desktop apps and this browser), and that a mic is selected as default input." : /denied|permission/i.test(e.message) ? "Allow the microphone for this site (click the padlock/camera icon in the address bar) and press Start again." : "Close other apps using the mic (Zoom, Teams) and try again."}</div>`;
+  }
 };
-function stopLive() { if (!LIVE) return; try { LIVE.proc.disconnect(); LIVE.ac.close(); LIVE.stream.getTracks().forEach((t) => t.stop()); LIVE.ws.close(); } catch (e) {} LIVE = null; $("#btn-live").textContent = "▶ Start listening"; $("#live-level").style.width = "0"; $("#live-now").className = "livenow"; $("#live-now").innerHTML = '<div class="muted">Not listening.</div>'; }
+function stopLive() { if (!LIVE) return; clearTimeout(LIVE.watchdog); try { LIVE.proc.disconnect(); LIVE.ac.close(); LIVE.stream.getTracks().forEach((t) => t.stop()); LIVE.ws.close(); } catch (e) {} LIVE = null; $("#btn-live").textContent = "▶ Start listening"; $("#live-level").style.width = "0"; $("#live-now").className = "livenow"; $("#live-now").innerHTML = '<div class="muted">Not listening.</div>'; }
 function renderLive(m) {
   const now = $("#live-now"); const thr = Number(SETTINGS.match_threshold || 0.75);
   if (!m.speech) { now.className = "livenow"; now.innerHTML = `<div class="muted">${m.speech_s > 0 ? `listening… ${m.speech_s}s of speech buffered` : "silence"} · ${m.level_db} dBFS</div>`; return; }

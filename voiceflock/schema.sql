@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS sources (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   processed_at TEXT,
   meta TEXT,
-  feed_id INTEGER
+  feed_id INTEGER,
+  review INTEGER NOT NULL DEFAULT 0,        -- 1 = the user wants to label the voices in this recording
+  notes TEXT,
+  stills_info TEXT
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -77,6 +80,8 @@ CREATE TABLE IF NOT EXISTS source_speakers (
   clip_fraction REAL,
   clip_path TEXT,
   stills TEXT,                             -- JSON [{t, file}] low-res video frames for this speaker
+  review_status TEXT,                      -- pending | done | skipped | NULL
+  notes TEXT,
   embedding BLOB,
   person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
   assignment TEXT,                         -- auto | confirmed | enrolled | named | NULL

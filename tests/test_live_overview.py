@@ -58,7 +58,13 @@ def test_live_websocket_roundtrip(data_dir, conn, monkeypatch):
         assert second["type"] == "status" and second["gallery"] == 2
         loud = (np.random.default_rng(1).normal(size=audio.SR * 4) * 3000).astype(np.int16)
         ws.send_bytes(loud.tobytes())
-        got = [ws.receive_json() for _ in range(2)]
+        got = []
+        while len(got) < 2:
+            m = ws.receive_json()
+            if m["type"] == "status":
+                assert "audio flowing" in m["text"]
+                continue
+            got.append(m)
         assert all(f["type"] == "frame" for f in got)
         assert got[-1]["candidates"][0]["name"] == "Alice" and got[-1]["alert"]
 

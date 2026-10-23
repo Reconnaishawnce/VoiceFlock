@@ -278,9 +278,11 @@ def process_source(conn: sqlite3.Connection, source_id: int, progress: Progress 
         try:
             from .stills import make_stills_for_source
             progress("stills", 0.0)
-            make_stills_for_source(conn, source_id, progress)
+            info = make_stills_for_source(conn, source_id, progress)
         except Exception as e:  # noqa: BLE001
             log.warning("stills failed for source %s: %s", source_id, e)
+            info = {"kind": "error", "stills": 0, "error": f"{type(e).__name__}: {e}"[:300]}
+        conn.execute("UPDATE sources SET stills_info=? WHERE id=?", (json.dumps(info), source_id))
     with db.tx(conn):
         decide_and_record(conn, source, results, settings, gcache)
         summary = {
@@ -291,6 +293,11 @@ def process_source(conn: sqlite3.Connection, source_id: int, progress: Progress 
         }
         conn.execute("UPDATE sources SET status='done', n_speakers=?, processed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),"
                      " meta=? WHERE id=?", (len(results), json.dumps(summary), source_id))
+        if source["review"]:
+            # the user wants to label this recording: queue every voice that isn't already a confident known match
+            for r in results:
+                if r.decision not in ("matched", "enrolled"):
+                    conn.execute("UPDATE source_speakers SET review_status='pending' WHERE id=?", (r.source_speaker_id,))
         if source["mode"] == "enroll":
             from .worker import enqueue
             enqueue(conn, None, "rematch", priority=-5, dedupe=True)  # earlier recordings may contain this person

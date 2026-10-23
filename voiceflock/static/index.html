@@ -56,10 +56,11 @@
         <div class="card col">
           <h2>Add recordings</h2>
           <div class="inline" style="flex-wrap:wrap;margin-bottom:6px">
-            <select id="add-mode" style="flex:0 0 auto;max-width:340px">
-              <option value="bulk">Add to library: file every voice, alert on known ones</option>
+            <select id="add-mode" style="flex:0 0 auto;max-width:420px">
+              <option value="bulk">Library: file every voice as background data (no labelling needed)</option>
+              <option value="review">Review: I want to label the voices in this (adds them to the review queue)</option>
               <option value="match">Identify only: who is in this? (saves nothing)</option>
-              <option value="enroll">Enroll: this is reference audio of one person</option>
+              <option value="enroll">Enroll: reference audio of one known person</option>
             </select>
             <input id="enroll-name" placeholder="Person's name" list="person-names" class="hidden" style="flex:1 1 200px">
             <datalist id="person-names"></datalist>
@@ -97,6 +98,7 @@
             <a class="link" href="/api/export/matches.csv">Export CSV</a></div></div>
         <div id="jobs"></div>
         <div id="sources"></div>
+        <details id="problems-box" class="hidden"><summary>Problems <span id="problems-count" class="muted"></span></summary><div id="problems"></div></details>
       </div>
     </div>
     <div id="lib-detail" class="hidden"></div>
@@ -107,7 +109,7 @@
     <div id="people-list">
       <div class="card">
         <div class="hdr">
-          <div class="seg" id="people-seg"><button data-view="known">Known</button><button data-view="unnamed">Unnamed voices</button><button data-view="packages">Packages</button><button data-view="dups">Possible duplicates</button></div>
+          <div class="seg" id="people-seg"><button data-view="review">To review</button><button data-view="known">Known</button><button data-view="unnamed">Unnamed voices</button><button data-view="packages">Packages</button><button data-view="dups">Possible duplicates</button></div>
           <div class="actions" style="margin:0"><input id="person-search" placeholder="search…" style="max-width:220px"><button class="small" id="btn-new-person">+ Identify someone</button></div>
         </div>
         <details id="identify-box"><summary>Identify someone from reference audio</summary>
@@ -189,6 +191,7 @@
   </section>
 </main>
 
+<div id="drawer" class="drawer hidden"><div class="drawer-head"><b id="drawer-title"></b><button class="small" onclick="closeDrawer()">✕</button></div><div id="drawer-body"></div></div>
 <div id="toast" class="toast hidden"></div>
 <script src="/static/app.js"></script>
 </body>

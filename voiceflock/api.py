@@ -68,6 +68,17 @@ class WipeIn(BaseModel):
     keep_settings: bool = True
 
 
+class SourcePatch(BaseModel):
+    notes: str | None = None
+    review: bool | None = None
+    name: str | None = None
+
+
+class SpeakerPatch(BaseModel):
+    notes: str | None = None
+    review_status: str | None = None   # pending | done | skipped | "" (clear)
+
+
 class YtListIn(BaseModel):
     url: str
     limit: int = 300
@@ -330,7 +341,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         gallery.add_prints(conn, person_id, sp["source_id"], speaker_id, mean, chunks, origin,
                            sp["speech_seconds"], sp["quality_score"])
         gallery.prune_prints(conn, person_id, int(settings["max_prints_per_person"]))
-        conn.execute("UPDATE source_speakers SET person_id=?, assignment=? WHERE id=?", (person_id, assignment, speaker_id))
+        conn.execute("UPDATE source_speakers SET person_id=?, assignment=?, review_status=CASE WHEN review_status IS NULL THEN NULL ELSE 'done' END WHERE id=?",
+                     (person_id, assignment, speaker_id))
         conn.execute("UPDATE matches SET status='confirmed', decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
                      " WHERE source_speaker_id=? AND person_id=?", (speaker_id, person_id))
         conn.execute("UPDATE matches SET status='rejected' WHERE source_speaker_id=? AND person_id!=? AND status IN ('open','auto')",
@@ -400,6 +412,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             "open_alerts": conn.execute(
                 "SELECT COUNT(*) FROM matches m JOIN persons p ON p.id=m.person_id WHERE m.status='auto' AND p.kind='named'").fetchone()[0],
             "stills_mb": round(sum(p.stat().st_size for p in stills.still_dir().glob("*.jpg")) / 1e6, 1),
+            "review_pending": conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending'").fetchone()[0],
         }
 
     # ---------------------------------------------------------------- settings
@@ -428,8 +441,11 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     # ---------------------------------------------------------------- uploads
     def _create_source(conn, name: str, filename: str | None, url: str | None, orig_path: str | None,
                        mode: str, incognito: bool, person_name: str | None) -> dict:
+        review = mode == "review"
+        if review:
+            mode = "bulk"
         if mode not in ("bulk", "match", "enroll"):
-            raise HTTPException(400, "mode must be bulk|match|enroll")
+            raise HTTPException(400, "mode must be bulk|review|match|enroll")
         pid = None
         if mode == "enroll":
             if not person_name:
@@ -437,8 +453,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             pid = find_or_create_person(conn, person_name)
             incognito = False
         cur = conn.execute(
-            "INSERT INTO sources(name, original_filename, url, orig_path, mode, incognito, enroll_person_id, status)"
-            " VALUES(?,?,?,?,?,?,?, 'queued')", (name, filename, url, orig_path, mode, int(incognito), pid))
+            "INSERT INTO sources(name, original_filename, url, orig_path, mode, incognito, enroll_person_id, status, review)"
+            " VALUES(?,?,?,?,?,?,?, 'queued', ?)", (name, filename, url, orig_path, mode, int(incognito), pid, int(review)))
         sid = int(cur.lastrowid)
         jid = worker.enqueue(conn, sid)
         return {"source_id": sid, "job_id": jid, "name": name}
@@ -447,8 +463,11 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     async def upload(files: list[UploadFile] = File(...), mode: str = Form("bulk"), incognito: bool = Form(False),
                      person_name: str | None = Form(None), force: bool = Form(False), conn=Depends(get_conn)):
         config.ensure_dirs()
+        review = mode == "review"
+        if review:
+            mode = "bulk"
         if mode not in ("bulk", "match", "enroll"):
-            raise HTTPException(400, "mode must be bulk|match|enroll")
+            raise HTTPException(400, "mode must be bulk|review|match|enroll")
         if mode == "enroll" and not (person_name or "").strip():
             raise HTTPException(400, "enroll mode needs a person name")
         out = []
@@ -458,8 +477,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 out.append({"name": fname, "error": "unsupported file type"})
                 continue
             with db.tx(conn):
-                cur = conn.execute("INSERT INTO sources(name, original_filename, mode, incognito, status) VALUES(?,?,?,?, 'queued')",
-                                   (Path(fname).stem, fname, mode, int(incognito)))
+                cur = conn.execute("INSERT INTO sources(name, original_filename, mode, incognito, status, review) VALUES(?,?,?,?, 'queued', ?)",
+                                   (Path(fname).stem, fname, mode, int(incognito), int(review)))
                 sid = int(cur.lastrowid)
             dest = config.ORIG_DIR / f"{sid}_{fname}"
             with open(dest, "wb") as fh:
@@ -536,7 +555,9 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         s = source_out(conn, s)
         s["speakers"] = [speaker_out(conn, sp) for sp in
                          db.rows(conn, "SELECT * FROM source_speakers WHERE source_id=? ORDER BY speech_seconds DESC", (sid,))]
-        s["settings"] = {k: config.Settings(conn)[k] for k in ("match_threshold", "confirm_threshold")}
+        s["settings"] = {k: config.Settings(conn)[k] for k in ("match_threshold", "confirm_threshold", "candidate_min_prob")}
+        s["stills_info"] = json.loads(s["stills_info"]) if s.get("stills_info") else None
+        s["review_pending"] = sum(1 for sp in s["speakers"] if sp.get("review_status") == "pending")
         return s
 
     @app.get("/api/sources/{sid}/audio")
@@ -562,6 +583,59 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         if not p:
             raise HTTPException(404, "media file missing")
         return FileResponse(p)
+
+    @app.patch("/api/sources/{sid}")
+    def patch_source(sid: int, body: SourcePatch, conn=Depends(get_conn)):
+        if not db.row(conn, "SELECT id FROM sources WHERE id=?", (sid,)):
+            raise HTTPException(404)
+        with db.tx(conn):
+            if body.notes is not None:
+                conn.execute("UPDATE sources SET notes=? WHERE id=?", (body.notes.strip() or None, sid))
+            if body.name is not None and body.name.strip():
+                conn.execute("UPDATE sources SET name=? WHERE id=?", (body.name.strip(), sid))
+            if body.review is not None:
+                conn.execute("UPDATE sources SET review=? WHERE id=?", (int(body.review), sid))
+        return source_out(conn, db.row(conn, "SELECT * FROM sources WHERE id=?", (sid,)))
+
+    @app.post("/api/sources/{sid}/review")
+    def queue_source_for_review(sid: int, conn=Depends(get_conn)):
+        """Put every voice of this recording that isn't a confirmed/named/enrolled person into the review queue."""
+        if not db.row(conn, "SELECT id FROM sources WHERE id=?", (sid,)):
+            raise HTTPException(404)
+        with db.tx(conn):
+            conn.execute("UPDATE sources SET review=1 WHERE id=?", (sid,))
+            n = conn.execute("UPDATE source_speakers SET review_status='pending' WHERE source_id=? AND (assignment IS NULL OR assignment='auto')"
+                             " AND (review_status IS NULL OR review_status='skipped')", (sid,)).rowcount
+        return {"queued": n}
+
+    @app.patch("/api/speakers/{speaker_id}")
+    def patch_speaker(speaker_id: int, body: SpeakerPatch, conn=Depends(get_conn)):
+        if not db.row(conn, "SELECT id FROM source_speakers WHERE id=?", (speaker_id,)):
+            raise HTTPException(404)
+        with db.tx(conn):
+            if body.notes is not None:
+                conn.execute("UPDATE source_speakers SET notes=? WHERE id=?", (body.notes.strip() or None, speaker_id))
+            if body.review_status is not None:
+                st = body.review_status.strip() or None
+                if st not in (None, "pending", "done", "skipped"):
+                    raise HTTPException(400, "review_status must be pending|done|skipped")
+                conn.execute("UPDATE source_speakers SET review_status=? WHERE id=?", (st, speaker_id))
+        return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,)))
+
+    @app.get("/api/review")
+    def review_queue(limit: int = 50, offset: int = 0, conn=Depends(get_conn)):
+        rows = db.rows(conn,
+            "SELECT ss.id FROM source_speakers ss JOIN sources s ON s.id=ss.source_id WHERE ss.review_status='pending'"
+            " ORDER BY s.id DESC, ss.speech_seconds DESC LIMIT ? OFFSET ?", (limit, offset))
+        total = conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending'").fetchone()[0]
+        items = []
+        for r in rows:
+            sp = speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (r["id"],)))
+            src = db.row(conn, "SELECT id, name, url, notes, duration_s, orig_path FROM sources WHERE id=?", (sp["source_id"],))
+            sp["source"] = {"id": src["id"], "name": src["name"], "notes": src["notes"], "youtube_id": youtube_id(src["url"]),
+                            "media_kind": "youtube" if youtube_id(src["url"]) else ("video" if src["orig_path"] and Path(src["orig_path"]).suffix.lower() in VIDEO_EXTS else "audio")}
+            items.append(sp)
+        return {"items": items, "total": total, "candidate_min_prob": float(config.Settings(conn)["candidate_min_prob"])}
 
     @app.post("/api/sources/{sid}/stills")
     def make_stills(sid: int, conn=Depends(get_conn)):
@@ -1245,6 +1319,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             g = app.state.gcache.get(conn, settings)
             await ws.send_json({"type": "status", "text": f"listening · {len(g.persons)} voices in gallery",
                                 "threshold": float(settings["match_threshold"]), "gallery": len(g.persons)})
+            received = 0
             while True:
                 msg = await ws.receive()
                 if msg.get("type") == "websocket.disconnect":
@@ -1253,6 +1328,9 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 if not data:
                     continue
                 samples = np.frombuffer(data, dtype=np.int16)
+                received += len(samples)
+                if received - len(samples) < 16000 <= received:
+                    await ws.send_json({"type": "status", "text": f"audio flowing · {len(g.persons)} voices in gallery · device {getattr(emb, 'device', '?')}"})
                 frames = await asyncio.to_thread(matcher.feed, samples)
                 for f in frames:
                     await ws.send_json(f.as_dict())

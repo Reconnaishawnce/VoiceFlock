@@ -112,8 +112,13 @@ def make_stills_for_source(conn: sqlite3.Connection, source_id: int, progress=No
             kind = "youtube" if fmt else None
         except Exception as e:  # noqa: BLE001
             log.warning("storyboard lookup failed for %s: %s", src["url"], e)
+            info = {"speakers": 0, "stills": 0, "kind": "error", "error": f"storyboard lookup: {type(e).__name__}: {e}"[:300]}
+            conn.execute("UPDATE sources SET stills_info=? WHERE id=?", (json.dumps(info), source_id))
+            return info
     if not kind:
-        return {"speakers": 0, "stills": 0, "kind": "none"}
+        info = {"speakers": 0, "stills": 0, "kind": "none", "error": "no video file and not a YouTube link" if not src["url"] else "YouTube returned no storyboard for this video"}
+        conn.execute("UPDATE sources SET stills_info=? WHERE id=?", (json.dumps(info), source_id))
+        return info
     speakers = db.rows(conn, "SELECT id FROM source_speakers WHERE source_id=? ORDER BY speech_seconds DESC", (source_id,))
     out_dir = still_dir()
     made = 0
@@ -134,7 +139,11 @@ def make_stills_for_source(conn: sqlite3.Connection, source_id: int, progress=No
                     stills.append({"t": round(t, 1), "file": out.name})
                     made += 1
             conn.execute("UPDATE source_speakers SET stills=? WHERE id=?", (json.dumps(stills), sp["id"]))
-    return {"speakers": len(speakers), "stills": made, "kind": kind}
+    info = {"speakers": len(speakers), "stills": made, "kind": kind}
+    if kind == "youtube" and fmt:
+        info["storyboard"] = {"format": fmt.get("format_id"), "tile": f"{fmt.get('width')}x{fmt.get('height')} / {fmt.get('columns')}x{fmt.get('rows')}", "fragments": len(fmt["fragments"])}
+    conn.execute("UPDATE sources SET stills_info=? WHERE id=?", (json.dumps(info), source_id))
+    return info
 
 
 def delete_stills(source_id: int) -> None:
