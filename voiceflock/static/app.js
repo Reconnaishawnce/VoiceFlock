@@ -189,12 +189,13 @@ function watchCard(p) {
 }
 function ago(ms) { const d = (Date.now() - ms) / 1000; if (d < 90) return "just now"; if (d < 5400) return `${Math.round(d / 60)} min ago`; if (d < 172800) return `${Math.round(d / 3600)} h ago`; return `${Math.round(d / 86400)} days ago`; }
 function photoBlock(p) {
-  const img = p.photo_url ? `<img class="photo" src="${esc(p.photo_url)}" alt="">` : glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 56);
+  return p.photo_url ? `<img class="photo" src="${esc(p.photo_url)}" alt="">` : glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 56);
+}
+function photoControls(p) {
   const stills = (p.heard_in || []).filter((h) => h.still_url && h.media_kind === "video").slice(0, 6);
-  return `<div class="photo-wrap">${img}<div class="photo-actions">
-    <label class="small btnlike">${p.photo_url ? "Replace" : "Add photo"}<input type="file" accept="image/*" hidden onchange="uploadPhoto(${p.id}, this.files[0])"></label>
-    ${stills.length ? `<details class="stillpick"><summary class="small btnlike">from a still</summary><div class="strip">${stills.map((h) => `<img class="thumb" src="${esc(h.still_url)}" title="${esc(h.name)}" onclick="photoFromStill(${p.id}, ${h.id}, ${h.watch_at ?? 0}, ${JSON.stringify(h.still_url)})">`).join("")}</div></details>` : ""}
-    ${p.photo_url ? `<button class="small" onclick="removePhoto(${p.id})">remove</button>` : ""}</div></div>`;
+  return `<label class="small btnlike">${p.photo_url ? "Replace photo" : "Add photo"}<input type="file" accept="image/*" hidden onchange="uploadPhoto(${p.id}, this.files[0])"></label>
+    ${stills.length ? `<details class="stillpick"><summary class="small btnlike">use a video still</summary><div class="strip">${stills.map((h) => `<img class="thumb" src="${esc(h.still_url)}" title="${esc(h.name)}" onclick="photoFromStill(${p.id}, ${h.id}, ${h.watch_at ?? 0}, ${JSON.stringify(h.still_url)})">`).join("")}</div></details>` : ""}
+    ${p.photo_url ? `<button class="small" onclick="removePhoto(${p.id})">remove photo</button>` : ""}`;
 }
 async function uploadPhoto(pid, file) { if (!file) return; const fd = new FormData(); fd.append("file", file); try { const r = await fetch(`/api/persons/${pid}/photo`, { method: "POST", body: fd }); if (!r.ok) throw new Error((await r.json()).detail || r.statusText); toast("Photo saved"); render(); } catch (e) { onErr(e); } }
 async function photoFromStill(pid, sid, t, stillUrl) { try { await api(`/api/persons/${pid}/photo/from_still`, { method: "POST", body: { source_id: sid, t, still_url: stillUrl } }); toast("Photo set from the recording"); render(); } catch (e) { onErr(e); } }
@@ -634,6 +635,7 @@ async function toggleFeed(id, enabled) { try { await api(`/api/feeds/${id}`, { m
 async function deleteFeed(id) { if (!confirm("Stop watching this feed?")) return; try { await api(`/api/feeds/${id}`, { method: "DELETE" }); loadFeeds(); } catch (e) { onErr(e); } }
 
 /* ---------------- PEOPLE ---------------- */
+const segBtn = (view) => $(`#people-seg button[data-view="${view}"]`) || { textContent: "" };
 $$("#people-seg button").forEach((b) => b.addEventListener("click", () => { STATE.peopleView = b.dataset.view; history.replaceState(null, "", `#people?view=${b.dataset.view}`); loadPeople(); }));
 $("#person-search").addEventListener("input", () => { clearTimeout(STATE._ps); STATE._ps = setTimeout(loadPeople, 200); });
 $("#btn-new-person").onclick = () => { $("#identify-box").open = true; $("#identify-name").focus(); };
@@ -683,19 +685,19 @@ async function loadPeople() {
   if (STATE.personId) { $("#people-list").classList.add("hidden"); $("#people-detail").classList.remove("hidden"); return loadPersonDetail(STATE.personId); }
   $("#people-detail").classList.add("hidden"); $("#people-list").classList.remove("hidden");
   $$("#people-seg button").forEach((b) => b.classList.toggle("active", b.dataset.view === STATE.peopleView));
-  api("/api/stats").then((st) => { $$("#people-seg button")[0].textContent = `To review (${st.review_pending})`; }).catch(() => {});
+  api("/api/stats").then((st) => { segBtn("review").textContent = `To review (${st.review_pending})`; }).catch(() => {});
   const q = $("#person-search").value.trim().toLowerCase(); const el = $("#people-content");
   if (!el.innerHTML) el.innerHTML = skeleton(5);
   try {
     if (STATE.peopleView === "watchlist") {
       const j = await api("/api/watchlist");
-      $$("#people-seg button").find((b) => b.dataset.view === "watchlist").textContent = `Watchlist (${j.people.length})`;
+      segBtn("watchlist").textContent = `Watchlist (${j.people.length})`;
       const list = j.people.filter((p) => p.name.toLowerCase().includes(q) || (p.role || "").toLowerCase().includes(q));
       el.innerHTML = list.length ? `<p class="muted">Everyone who raises an alert, newest sighting first. Open a card for the full dossier: photo, role, why you watch them, links, what they said, and every time they were heard.</p><div class="wl-grid">${list.map(watchCard).join("")}</div>`
         : empty("Nobody on the watchlist yet. Flip the 🔔 on a person or a package to add them.");
     } else if (STATE.peopleView === "review") {
       const j = await api("/api/review?limit=40"); STATE.reviewItems = j.items; await loadNames();
-      $$("#people-seg button")[0].textContent = `To review (${j.total})`;
+      segBtn("review").textContent = `To review (${j.total})`;
       el.innerHTML = j.items.length ? `<p class="muted">Voices you asked to label. Watch, type a name (Enter saves), or skip. Naming or confirming removes the item.</p>` + j.items.map((sp) => {
         const h = { id: sp.source.id, name: sp.source.name, youtube_id: sp.source.youtube_id, media_kind: sp.source.media_kind, watch_at: sp.longest?.start_s ?? sp.first_start_s, first_start_s: sp.first_start_s, still_url: sp.stills?.[0]?.url, speech_seconds: sp.speech_seconds };
         return `<div class="review-item">${thumb(h) || '<div class="thumb"></div>'}<div>
@@ -706,12 +708,12 @@ async function loadPeople() {
           <textarea class="notes" placeholder="Notes about this voice" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea></div></div>`; }).join("") : empty("Nothing to review. Upload a recording with the Review intent, or open a recording and press “Add voices to review queue”.");
     } else if (STATE.peopleView === "known") {
       const named = await loadNames();
-      $$("#people-seg button")[1].textContent = `Known (${named.length})`;
+      segBtn("known").textContent = `Known (${named.length})`;
       el.innerHTML = named.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item" style="display:flex;gap:10px;align-items:center">${glyphSvg(p.glyph)}<div style="flex:1"><a class="link" onclick="openPerson(${p.id})"><b>${esc(p.name)}</b></a>${bell(p)}
         <div class="muted" style="font-size:12px">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints</div></div><button class="small" onclick="openPerson(${p.id})">Open</button></div>`).join("") || empty("No known people yet. Name an unnamed voice, or identify someone from reference audio.");
     } else if (STATE.peopleView === "unnamed") {
       const [u, named] = await Promise.all([api("/api/voices/unnamed"), loadNames()]);
-      $$("#people-seg button")[2].textContent = `Unnamed voices (${u.voices.length})`;
+      segBtn("unnamed").textContent = `Unnamed voices (${u.voices.length})`;
       const mergeOpts = (self) => `<option value="">Merge into…</option>` + u.voices.filter((v) => v.id !== self).map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("") + named.map((p) => `<option value="${p.id}">${esc(p.name)} (known)</option>`).join("");
       el.innerHTML = `<p class="muted">Background data, most-heard first. Open one to watch where it was heard; <b>Name</b> it if you know who it is; <b>Keep</b> tracks it as a known voice without a name.</p><div class="grid">` + u.voices.filter((v) => v.name.toLowerCase().includes(q)).map((v) => `<div class="vcard">
         <div class="nm"><a class="link" onclick="openPerson(${v.id})">${esc(v.name)}</a>${bell(v)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
@@ -720,7 +722,7 @@ async function loadPeople() {
         <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || empty("No unnamed voices yet. They appear as recordings are processed.");
     } else if (STATE.peopleView === "packages") {
       const j = await api("/api/groups"); ALLGROUPS = j.groups;
-      $$("#people-seg button")[3].textContent = `Packages (${j.groups.length})`;
+      segBtn("packages").textContent = `Packages (${j.groups.length})`;
       el.innerHTML = `<p class="muted">A package is a set of voices with one alert setting: flag 500 politicians at once, give them all the same alarm and line, download or share them as one file.</p>
         <div class="inline" style="max-width:520px"><input id="newpkg" placeholder="New package name, e.g. Politicians"><button class="small primary" onclick="createGroup()">Create</button><label class="link" style="align-self:center;white-space:nowrap">import package<input type="file" id="import-pkg" accept="application/json" hidden></label></div>
         ${j.groups.map((g) => `<div class="item" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -731,7 +733,7 @@ async function loadPeople() {
       $("#import-pkg").addEventListener("change", importPackage);
     } else {
       const j = await api("/api/voices/merge_suggestions");
-      $$("#people-seg button")[4].textContent = `Possible duplicates (${j.pairs.length})`;
+      segBtn("dups").textContent = `Possible duplicates (${j.pairs.length})`;
       el.innerHTML = `<p class="muted">Different mics or rooms can split one person into several entries, and one person can be named twice. Listen to both, look at the stills, then decide. Pairs you mark as different people stay apart.</p>
         ${j.pairs.length ? j.pairs.map(mergeCard).join("") : empty("No likely duplicates right now.")}
         ${j.distinct.length ? `<details><summary>Kept apart (${j.distinct.length})</summary>${j.distinct.map((d) => `<div class="item"><a class="link" onclick="openPerson(${d.a_id})">${esc(d.a_name)}</a> <span class="muted">≠</span> <a class="link" onclick="openPerson(${d.b_id})">${esc(d.b_name)}</a> <button class="small" onclick="unmarkDistinct(${d.a_id}, ${d.b_id})">undo</button></div>`).join("")}</details>` : ""}`;
@@ -808,6 +810,8 @@ async function loadPersonDetail(id) {
             <button class="small primary" onclick="saveAlertSettings(${p.id})">Save</button><button class="small" onclick="testAlert(${p.id})">▶ Test</button></div>
           <div class="sub">Will say: “${esc(p.spoken)}”. <code>[NAME]</code> = ${esc(p.name)}; empty = default from Settings.</div>
         </details>
+        <details class="dossier-wrap"><summary>Dossier <span class="muted">· photo, role, links, why you watch them, printable page</span></summary>
+          <div class="photo-actions" style="justify-content:flex-start;margin:8px 0">${photoControls(p)}</div>
         <div class="dossier">
           <div class="inline" style="flex-wrap:wrap"><input id="role-${p.id}" placeholder="Role · e.g. U.S. Senator (D-MA)" value="${esc(p.role || "")}" style="flex:1 1 260px" onblur="patchPerson(${p.id}, {role: this.value})">
             <input id="links-${p.id}" placeholder="Links, separated by spaces (Wikipedia, official page, …)" value="${esc((p.links || []).join(" "))}" style="flex:2 1 320px" onblur="patchPerson(${p.id}, {links: this.value.split(/\s+/).filter(Boolean)})"></div>
@@ -817,6 +821,7 @@ async function loadPersonDetail(id) {
           <div class="actions"><a class="link" href="/api/persons/${p.id}/dossier" target="_blank">Open printable dossier</a> · <a class="link" href="/api/persons/${p.id}/dossier?format=md">download .md</a></div>
         </div>
         ${(p.quotes || []).length ? `<h3>In their words <span class="muted" style="text-transform:none;letter-spacing:0">· from the transcripts</span></h3><div class="quotes">${p.quotes.map((q) => `<div class="quote" onclick="openSourceAt(${q.source_id}, ${q.start_s})"><span class="tr-x">“${esc(q.text.length > 260 ? q.text.slice(0, 260) + "…" : q.text)}”</span><span class="sub">${esc(q.source_name)} · ${fmtT(q.start_s)}</span></div>`).join("")}</div>` : ""}
+        </details>
         ${(p.timeline || []).length ? `<h3>Timeline <span class="muted" style="text-transform:none;letter-spacing:0">· recordings, laptop Live hits, phone hits</span></h3><div class="timeline-list">${p.timeline.slice(0, 40).map(timelineRow).join("")}</div>` : ""}
         <h3>Heard in ${p.heard_in.length} recordings</h3>
         ${p.heard_in.map((h) => `<div class="appear"><div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})"><b>${esc(h.name)}</b></a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech · <span class="pill">${esc(h.assignment)}</span></span>${clip(h.clip_url)}</div></div>
@@ -984,6 +989,12 @@ $("#btn-save-settings").onclick = async (e) => {
   e.preventDefault(); const body = {}; $$("#settings-form [name]").forEach((i) => { body[i.name] = i.type === "checkbox" ? i.checked : i.value; });
   try { const j = await api("/api/settings", { method: "PUT", body }); SETTINGS = j.values; $("#settings-msg").textContent = "Saved."; toast("Settings saved"); loadStats(); } catch (er) { onErr(er); }
 };
+function copyText(t) {
+  const done = () => toast("Copied");
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t).then(done).catch(() => fallbackCopy(t)); return; }
+  fallbackCopy(t);
+  function fallbackCopy(v) { const ta = document.createElement("textarea"); ta.value = v; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch (e) { prompt("Copy this address:", v); } ta.remove(); }
+}
 async function renderPhone() {
   try {
     const es = await api("/api/mobile/export_status");
@@ -991,7 +1002,7 @@ async function renderPhone() {
     const h = await api("/api/health"); const port = location.port || (location.protocol === "https:" ? 443 : 80);
     const addrs = (h.lan_ips || []).map((ip) => `http://${ip}:${port}`);
     const ts = h.tailscale || {}; const tsAddr = ts.https_url || (ts.dns_name ? `http://${ts.dns_name}:${h.port || port}` : null);
-    $("#phone-info").innerHTML = (tsAddr ? `<b>Over the internet (Tailscale):</b> <code>${esc(tsAddr)}</code> <button class="small" onclick="navigator.clipboard.writeText(${JSON.stringify(tsAddr)}).then(()=>toast('Copied'))">copy</button>${ts.https_url ? "" : ` <span class="muted">· for HTTPS (phone browser microphone), run once as admin: <code>tailscale serve --bg ${h.port || port}</code></span>`}<br>`
+    $("#phone-info").innerHTML = (tsAddr ? `<b>Over the internet (Tailscale):</b> <code>${esc(tsAddr)}</code> <button class="small" data-copy="${esc(tsAddr)}" onclick="copyText(this.dataset.copy)">copy</button>${ts.https_url ? "" : ` <span class="muted">· for HTTPS (phone browser microphone), run once as admin: <code>tailscale serve --bg ${h.port || port}</code></span>`}<br>`
       : ts.installed ? `<b>Tailscale</b> is installed but not connected: open the Tailscale app and sign in.<br>` : `<b>From anywhere:</b> install <a class="link" href="https://tailscale.com/download" target="_blank">Tailscale</a> on this laptop and on the phone (same account); this line then shows the address to paste into the app.<br>`)
       + `<b>Same Wi-Fi only:</b> ${addrs.map((a) => `<code>${esc(a)}</code>`).join(" ") || esc(location.origin)}<br>Password: ${h.password_required ? "the one in .env" : "none set (set VOICEFLOCK_PASSWORD in .env before exposing this over the internet)"}`;
     const r = await fetch("/api/mobile/model.onnx", { method: "HEAD" }); const ms = $("#model-status");

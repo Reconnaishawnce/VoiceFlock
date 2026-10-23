@@ -1231,6 +1231,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         g = app.state.gcache.get(conn)
         settings = config.Settings(conn)
         thr = float(settings["unknown_cluster_threshold"])
+        confirm_thr = max(thr, float(settings["confirm_threshold"]))
         distinct = {(_pair_key(r["a_id"], r["b_id"])) for r in conn.execute("SELECT a_id, b_id FROM distinct_pairs")}
         if len(g) == 0:
             return {"pairs": [], "threshold": thr, "distinct": []}
@@ -1248,9 +1249,17 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 ka, kb = g.persons[pids[a]]["kind"], g.persons[pids[b]]["kind"]
                 raw, norm, prob = g.score_pair(M[a], M[b])
                 both_named = ka == "named" and kb == "named"
+                both_unnamed = ka == "provisional" and kb == "provisional"
                 names_alike = both_named and same_name(g.persons[pids[a]]["name"], g.persons[pids[b]]["name"])
-                if prob >= thr and (not both_named or prob >= max(thr, 0.9)):
-                    reason = "voices match" if not both_named else "two known people whose voices match"
+                # unnamed vs unnamed: the clustering-split case, at the clustering threshold
+                # unnamed vs known: only when it is a near-certain match (otherwise it is a candidate on the recording, not a duplicate)
+                # known vs known: only a near-identical voice (both measures) or near-identical names
+                if both_unnamed and prob >= thr:
+                    reason = "voices match"
+                elif not both_named and not both_unnamed and prob >= confirm_thr:
+                    reason = "voices match"
+                elif both_named and prob >= 0.97 and raw >= 0.8:
+                    reason = "two known people whose voices match"
                 elif names_alike and prob >= 0.4:
                     reason = "similar names"
                 else:
