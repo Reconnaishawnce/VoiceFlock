@@ -110,6 +110,15 @@ def cmd_enroll(a):
 
 
 def cmd_calibrate(a):
+    if a.from_decisions or not a.folder:
+        from . import db, selfcal
+        db.init_db()
+        res = selfcal.run(db.connect())
+        print(json.dumps(res, indent=2))
+        m = res["active_mode"] if res["active_mode"] in res["modes"] else "raw"
+        print(f"\nFitted from {res['n_target']} same-voice and {res['n_nontarget']} different-voice decisions. "
+              f"EER={res['modes'][m]['eer']*100:.2f}%  suggested match threshold: {res['suggested_match_threshold']}")
+        return
     from .calibrate import run
     res = run(Path(a.folder), add_cohort=not a.no_cohort, replace_cohort=a.replace_cohort)
     print(json.dumps(res, indent=2))
@@ -293,8 +302,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("clips", nargs="+")
     s.set_defaults(fn=cmd_enroll)
 
-    s = sub.add_parser("calibrate", help="fit calibration from <folder>/<speaker>/<clips> (+ optional pairs.csv)")
-    s.add_argument("folder")
+    s = sub.add_parser("calibrate", help="fit calibration from <folder>/<speaker>/<clips> (+ optional pairs.csv), or --from-decisions")
+    s.add_argument("folder", nargs="?")
+    s.add_argument("--from-decisions", action="store_true", help="fit from your own Confirm/Name/Reject decisions instead of a folder")
     s.add_argument("--no-cohort", action="store_true", help="don't add these speakers to the s-norm cohort")
     s.add_argument("--replace-cohort", action="store_true", help="replace the explicit cohort with these speakers")
     s.set_defaults(fn=cmd_calibrate)

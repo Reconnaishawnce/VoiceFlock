@@ -217,3 +217,5 @@ body.drawer-open main { padding-right:min(490px, 94vw); transition:padding .26s 
 .drawer .cands td:nth-child(2) { white-space:normal; font-size:14px; } .drawer .cands .pbar { max-width:220px; }
 .drawer .cands .cmp audio { max-width:100%; } .drawer .cands .act { display:flex; gap:6px; margin-top:6px; white-space:nowrap; }
 .drawer .cands .act button { display:inline-block; width:auto; margin:0; }
+.spk.ignored { opacity:.6; padding:10px 16px; } .spk.ignored:hover { opacity:1; }
+.tl-legend .link.ignored { opacity:.5; text-decoration:line-through; }

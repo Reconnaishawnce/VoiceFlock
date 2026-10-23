@@ -199,3 +199,27 @@ def test_naming_a_clustered_speaker_names_the_whole_unnamed_voice(client, conn):
     sid4, ss4 = seed_speaker(conn, "hearing D", other, prob=0.8)
     sp = client.post(f"/api/speakers/{ss4}/name", json={"name": "Carol"}).json()
     assert sp["person"]["name"] == "Carol" and client.get(f"/api/persons/{other}").json()["name"] == "Bob"
+
+
+def test_ignore_noise_speaker(client, conn):
+    """A 'speaker' that is laughter or ambient noise: Not a voice removes it from matching for good, undo brings it back."""
+    from voiceflock import rematch
+    pid = conn.execute("INSERT INTO persons(name, kind) VALUES('Alice', 'named')").lastrowid
+    gallery.add_prints(conn, pid, None, None, rand_unit(np.random.default_rng(1)), [], "cli")
+    sid, ssid = seed_speaker(conn, "noisy", pid, prob=0.8)
+    client.post(f"/api/matches/{client.get('/api/alerts').json()['known'][0]['match_id']}/confirm")
+    assert conn.execute("SELECT COUNT(*) FROM prints WHERE source_speaker_id=?", (ssid,)).fetchone()[0] == 1
+    client.post(f"/api/sources/{sid}/review")
+    sp = client.post(f"/api/speakers/{ssid}/ignore").json()
+    assert sp["ignored"] == 1 and sp["person"] is None and sp["candidates"] == []
+    assert conn.execute("SELECT COUNT(*) FROM prints WHERE source_speaker_id=?", (ssid,)).fetchone()[0] == 0
+    assert client.get("/api/review").json()["total"] == 0 and client.get("/api/stats").json()["review_pending"] == 0
+    assert client.get(f"/api/persons/{pid}").json()["name"] == "Alice"          # the person itself is untouched
+    rematch.rematch(conn)                                                         # re-matching leaves it alone
+    assert conn.execute("SELECT COUNT(*) FROM matches WHERE source_speaker_id=?", (ssid,)).fetchone()[0] == 0
+    assert client.get(f"/api/sources/{sid}").json()["speakers"][0]["ignored"] == 1
+    sp = client.post(f"/api/speakers/{ssid}/unignore").json()
+    assert sp["ignored"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM jobs WHERE type='rematch' AND status='queued'").fetchone()[0] >= 1
+    rematch.rematch(conn)
+    assert conn.execute("SELECT COUNT(*) FROM matches WHERE source_speaker_id=?", (ssid,)).fetchone()[0] >= 1

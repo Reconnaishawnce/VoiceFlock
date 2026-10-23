@@ -287,6 +287,20 @@ smoothed over consecutive speech windows, and alerted when a flagged person is a
 
 Check the recording-consent law where you are before listening to people continuously.
 
+## Calibration and noise
+
+**Calibrate from your decisions.** Every Confirm, Name, Enroll and Reject is a labelled trial. Settings →
+*Probability calibration* → **Calibrate from my decisions** scores each confirmed speaker against the library
+(prints from its own recording excluded), fits the probability model to the same-voice and different-voice
+score distributions, re-scores the library, and suggests a match threshold at about 1% false alarms. Needs
+roughly 8 confirmed or named speakers across 2 people. Repeat whenever you have made many more decisions.
+Command line: `voiceflock calibrate --from-decisions`. *Back to defaults* undoes it.
+
+**Not a voice.** A diarized "speaker" that is laughter, applause, crosstalk or room noise: press **Not a voice**
+on its card, in the side panel, in the review queue, or in the low-confidence warning. Its prints and
+candidates are removed and it is never matched, never used as a print, never queued for review and never used
+for calibration. The segments stay on the timeline, greyed out, with an Undo.
+
 ## Updating
 
 Easiest: **Settings → Version & updates → Check for updates → Update and restart**. The launcher

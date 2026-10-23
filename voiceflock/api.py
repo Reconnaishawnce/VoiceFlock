@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, stills, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, stills, transfer, worker, youtube, selfcal
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -414,7 +414,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             "open_alerts": conn.execute(
                 "SELECT COUNT(*) FROM matches m JOIN persons p ON p.id=m.person_id WHERE m.status='auto' AND p.kind='named'").fetchone()[0],
             "stills_mb": round(sum(p.stat().st_size for p in stills.still_dir().glob("*.jpg")) / 1e6, 1),
-            "review_pending": conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending'").fetchone()[0],
+            "review_pending": conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending' AND ignored=0").fetchone()[0],
         }
 
     # ---------------------------------------------------------------- settings
@@ -606,7 +606,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             raise HTTPException(404)
         with db.tx(conn):
             conn.execute("UPDATE sources SET review=1 WHERE id=?", (sid,))
-            n = conn.execute("UPDATE source_speakers SET review_status='pending' WHERE source_id=? AND (assignment IS NULL OR assignment='auto')"
+            n = conn.execute("UPDATE source_speakers SET review_status='pending' WHERE source_id=? AND ignored=0 AND (assignment IS NULL OR assignment='auto')"
                              " AND (review_status IS NULL OR review_status='skipped')", (sid,)).rowcount
         return {"queued": n}
 
@@ -627,9 +627,9 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     @app.get("/api/review")
     def review_queue(limit: int = 50, offset: int = 0, conn=Depends(get_conn)):
         rows = db.rows(conn,
-            "SELECT ss.id FROM source_speakers ss JOIN sources s ON s.id=ss.source_id WHERE ss.review_status='pending'"
+            "SELECT ss.id FROM source_speakers ss JOIN sources s ON s.id=ss.source_id WHERE ss.review_status='pending' AND ss.ignored=0"
             " ORDER BY s.id DESC, ss.speech_seconds DESC LIMIT ? OFFSET ?", (limit, offset))
-        total = conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending'").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending' AND ignored=0").fetchone()[0]
         items = []
         for r in rows:
             sp = speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (r["id"],)))
@@ -1063,6 +1063,49 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             assign_speaker(conn, speaker_id, pid, "named", "named")
             queue_rematch(conn)
         return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,)))
+
+    @app.post("/api/speakers/{speaker_id}/ignore")
+    def ignore_speaker(speaker_id: int, conn=Depends(get_conn)):
+        """Not a voice (noise, laughter, crosstalk): drop its prints and candidates and keep it out of matching,
+        the review queue and calibration. The segments stay on the timeline, greyed out. Undo with /unignore."""
+        with db.tx(conn):
+            unassign_speaker(conn, speaker_id)
+            conn.execute("DELETE FROM matches WHERE source_speaker_id=?", (speaker_id,))
+            conn.execute("UPDATE source_speakers SET ignored=1, review_status=CASE WHEN review_status='pending' THEN 'done' ELSE review_status END"
+                         " WHERE id=?", (speaker_id,))
+        return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,)))
+
+    @app.post("/api/speakers/{speaker_id}/unignore")
+    def unignore_speaker(speaker_id: int, conn=Depends(get_conn)):
+        sp = db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,))
+        if sp is None:
+            raise HTTPException(404, "speaker not found")
+        with db.tx(conn):
+            conn.execute("UPDATE source_speakers SET ignored=0 WHERE id=?", (speaker_id,))
+            queue_rematch(conn, int(sp["source_id"]))
+        return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,)))
+
+    @app.get("/api/calibration")
+    def calibration_status(conn=Depends(get_conn)):
+        return selfcal.status(conn)
+
+    @app.post("/api/calibration/decisions")
+    def calibrate_from_decisions(conn=Depends(get_conn)):
+        """Fit the probability model from every Confirm / Name / Enroll / Reject made so far, then re-score the library."""
+        try:
+            rep = selfcal.run(conn)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        with db.tx(conn):
+            queue_rematch(conn)
+        return rep
+
+    @app.post("/api/calibration/reset")
+    def calibration_reset(conn=Depends(get_conn)):
+        selfcal.reset(conn)
+        with db.tx(conn):
+            queue_rematch(conn)
+        return selfcal.status(conn)
 
     @app.post("/api/speakers/{speaker_id}/unassign")
     def unassign(speaker_id: int, conn=Depends(get_conn)):

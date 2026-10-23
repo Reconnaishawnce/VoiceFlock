@@ -223,6 +223,36 @@ class Gallery:
             c.margin = c.probability - nxt
         return [c for c in cands if c.probability >= min_prob]
 
+    def scores_by_person(self, probe: np.ndarray, exclude_source: int = -1) -> dict[int, tuple[float, float]]:
+        """Best (raw, normalised) score of the probe against every person, prints of exclude_source left out.
+        Used for calibration from decisions; vectorised so hundreds of probes take well under a second."""
+        if len(self) == 0:
+            return {}
+        probe = l2n(probe)
+        s = self.emb @ probe
+        keep = np.ones(len(self), dtype=bool)
+        if exclude_source >= 0:
+            keep &= self.source_ids != exclude_source
+        if not keep.any():
+            return {}
+        order = np.argsort(-s)
+        order = order[keep[order]]
+        _, first = np.unique(self.person_ids[order], return_index=True)
+        best_idx = order[first]
+        mode = self.score_mode
+        if mode == "snorm":
+            zmu, zsd = self.cohort.stats(probe, exclude_source=exclude_source)
+        out: dict[int, tuple[float, float]] = {}
+        for i in best_idx:
+            raw = float(s[i])
+            if mode == "snorm":
+                tmu, tsd = self._tstat(int(i))
+                norm = 0.5 * ((raw - zmu) / zsd + (raw - tmu) / tsd)
+            else:
+                norm = raw
+            out[int(self.person_ids[i])] = (raw, norm)
+        return out
+
     def score_pair(self, a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
         """(raw, normalised, probability) for two embeddings using this gallery's cohort+calibration."""
         a, b = l2n(a), l2n(b)

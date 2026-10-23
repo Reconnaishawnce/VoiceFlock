@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS source_speakers (
   stills TEXT,                             -- JSON [{t, file}] low-res video frames for this speaker
   review_status TEXT,                      -- pending | done | skipped | NULL
   notes TEXT,
+  ignored INTEGER NOT NULL DEFAULT 0,      -- 1 = not a voice (noise, laughter, crosstalk): never matched, never a print
   embedding BLOB,
   person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
   assignment TEXT,                         -- auto | confirmed | enrolled | named | NULL

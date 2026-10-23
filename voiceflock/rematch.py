@@ -26,7 +26,7 @@ def rematch(conn: sqlite3.Connection, source_ids: list[int] | None = None,
 
     q = ("SELECT ss.*, s.incognito AS src_incognito, p.kind AS person_kind FROM source_speakers ss"
          " JOIN sources s ON s.id=ss.source_id LEFT JOIN persons p ON p.id=ss.person_id"
-         " WHERE ss.embedding IS NOT NULL AND (ss.assignment IS NULL OR ss.assignment='auto')")
+         " WHERE ss.embedding IS NOT NULL AND ss.ignored=0 AND (ss.assignment IS NULL OR ss.assignment='auto')")
     params: tuple = ()
     if source_ids:
         q += f" AND ss.source_id IN ({','.join('?' * len(source_ids))})"

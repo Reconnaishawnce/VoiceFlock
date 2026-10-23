@@ -184,7 +184,11 @@
         <div class="inline" style="max-width:420px"><input id="wipe-confirm" placeholder='type WIPE to enable'><button class="small danger" id="btn-wipe" disabled>Wipe everything</button></div>
         <div id="wipe-msg" class="muted"></div>
       </details>
-      <details><summary><b>Backup, transfer, calibration</b></summary>
+      <details open><summary><b>Probability calibration</b></summary>
+        <p class="muted">Every Confirm, Name, Enroll and Reject you make is a labelled trial. Fitting the probability model to them makes the percentages mean something for your microphones and rooms, instead of generic constants.</p>
+        <div id="calibration"><div class="skel" style="width:60%"></div></div>
+      </details>
+      <details><summary><b>Backup, transfer, calibration from files</b></summary>
         <p class="muted">Everything lives in the <code>data</code> folder. <a class="link" href="/api/export/gallery.json">Export gallery JSON</a> or import one: <label class="link">choose file<input type="file" id="import-gallery" accept="application/json" hidden></label> <span id="import-msg" class="muted"></span></p>
         <p class="muted">Command line: <code>voiceflock calibrate &lt;folder&gt;</code> fits probability calibration from labelled clips; <code>voiceflock evaluate &lt;folder&gt;</code> reports rank-1 accuracy, EER, DET curve and miss rate at 1% false alarm.</p>
         <pre id="calib-info" class="muted"></pre>

@@ -187,6 +187,7 @@ async function loadHome() {
     const [a, o] = await Promise.all([api("/api/alerts"), api("/api/overview")]); OV = o;
     const thr = Number(SETTINGS.match_threshold || 0.75);
     $("#alert-hint").textContent = `≥ ${pct(thr)} · confirm only when very sure (≥ ${pct(a.confirm_threshold)})`;
+    api("/api/calibration").then((c) => { if (!c.fitted.raw && c.available.enough) $("#alert-hint").innerHTML += ` · <a class="link" onclick="go('settings')" title="the percentages are generic until then">calibrate from your ${c.available.labelled_speakers} decisions</a>`; }).catch(() => {});
     $("#alerts-known").innerHTML = a.known.length ? a.known.slice(0, 30).map((k) => `<div class="item">
       <div class="title"><a class="link" onclick="openPerson(${k.person_id})">${esc(k.person_name)}</a> in <a class="link" onclick="openSource(${k.source_id})">${esc(k.source_name)}</a> at ${fmtT(k.first_start_s)}${k.status === "confirmed" ? '<span class="pill named">confirmed</span>' : ""}</div>
       <div class="scoreline"><span class="prob ${probCls(k.probability, thr, a.confirm_threshold)}">${pct(k.probability)}</span><span class="muted">+${pct(k.margin)} over #2</span></div>
@@ -276,8 +277,8 @@ async function loadSourceDetail(id) {
   try {
     const src = await api(`/api/sources/${id}`);
     const el = $("#lib-detail");
-    if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
-    el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]);
+    if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
+    el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]);
     const sameSource = STATE.src?.id === src.id;
     el.innerHTML = `<button class="back" onclick="back('library')">← Back</button><div class="card">${sourceView(src)}</div>`;
     el.classList.add("tab");
@@ -319,7 +320,7 @@ function timeline(src) {
   if (!src.duration_s || !(src.speakers || []).length) return "";
   const d = src.duration_s;
   const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s});openSpeaker(${sp.id})"></div>`).join("")).join("");
-  const legend = src.speakers.map((sp, i) => `<span class="link" onclick="openSpeaker(${sp.id}, true)" title="play this voice and open its panel"><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}</span>`).join("");
+  const legend = src.speakers.map((sp, i) => `<span class="link${sp.ignored ? " ignored" : ""}" onclick="openSpeaker(${sp.id}, true)" title="${sp.ignored ? "ignored (not a voice)" : "play this voice and open its panel"}"><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}${sp.ignored ? " ·  ignored" : ""}</span>`).join("");
   return `<div class="timeline" id="tl-${src.id}" onclick="seekFrac(${src.id}, event)">${segs}<div class="cursor" style="left:0"></div></div><div class="tl-legend">${legend}</div>`;
 }
 /* ---------------- side panel for one voice ---------------- */
@@ -330,6 +331,11 @@ function openSpeaker(id, play = false) {
   const top = sp.candidates[0]; const thr = Number(SETTINGS.match_threshold || 0.75);
   const who = sp.person ? `<a class="link" onclick="openPerson(${sp.person.id})"><b>${esc(sp.person.name)}</b></a> <span class="pill ${sp.person.kind}">${sp.person.kind === "named" ? "known" : "unnamed"}</span>` : top && top.probability >= thr && top.person_kind === "named" ? `probably <a class="link" onclick="openPerson(${top.person_id})"><b>${esc(top.person_name)}</b></a>` : `<b>Unknown</b>`;
   const unnamed = !sp.person || sp.person.kind === "provisional";
+  if (sp.ignored) {
+    $("#drawer-body").innerHTML = `<div class="warnbox">Ignored: treated as noise, not a voice. It is never matched and never becomes a print.</div>
+      <div class="actions">${sp.longest ? `<button class="small" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ play longest turn</button>` : ""}<button class="small primary" onclick="unignoreSpeaker(${sp.id})">Undo · it is a voice</button></div>${sp.clip_url ? clip(sp.clip_url) : ""}`;
+    STATE.drawerSpeaker = id; $("#drawer").classList.remove("hidden"); document.body.classList.add("drawer-open"); return;
+  }
   $("#drawer-body").innerHTML = `
     <div style="margin-bottom:8px">${who}${sp.review_status === "pending" ? ' <span class="pill provisional">to review</span>' : ""}</div>
     <div class="namebox">
@@ -342,7 +348,8 @@ function openSpeaker(id, play = false) {
     ${(sp.stills || []).length ? `<div class="strip">${sp.stills.map((x) => `<img class="thumb" loading="lazy" src="${esc(x.url)}" title="jump to ${fmtT(x.t)}" onclick="seek(${src.id}, ${x.t})">`).join("")}</div>` : ""}
     ${sp.clip_url ? `<div class="turn">this voice, best ${SETTINGS.clip_seconds || 8} s</div>${clip(sp.clip_url)}` : ""}
     <div class="actions">${sp.person ? `<button class="small" onclick="openPerson(${sp.person.id})">Open profile · other clips</button><button class="small" onclick="unassign(${sp.id})">Not them / undo</button>` : ""}
-      ${sp.review_status === "pending" ? `<button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip for now</button><button class="small" onclick="setReview(${sp.id}, 'done')">Mark done</button>` : `<button class="small" onclick="setReview(${sp.id}, 'pending')">Add to review queue</button>`}</div>
+      ${sp.review_status === "pending" ? `<button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip for now</button><button class="small" onclick="setReview(${sp.id}, 'done')">Mark done</button>` : `<button class="small" onclick="setReview(${sp.id}, 'pending')">Add to review queue</button>`}
+      <button class="small" onclick="ignoreSpeaker(${sp.id})" title="noise, laughter, crosstalk: drop it from matching for good">Not a voice</button></div>
     <textarea class="notes" placeholder="Notes about this voice (context, guesses, links…)" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea>
     <h3>Candidates <span class="muted" style="text-transform:none;letter-spacing:0">· listen to both before deciding</span></h3><div id="cands-${sp.id}">${candidateTable(sp)}</div>`;
   const fresh = STATE.drawerSpeaker !== id || $("#drawer").classList.contains("hidden");
@@ -375,8 +382,10 @@ function qualityWarning(sp) {
   if ((sp.speech_seconds || 0) < 10) w.push("under 10 s of speech");
   if ((sp.snr_db ?? 99) < 10) w.push("low SNR");
   if ((sp.clip_fraction || 0) > 0.01) w.push("clipping");
-  return w.length ? `<div class="warnbox">Low-confidence clip (${w.join(", ")}).</div>` : "";
+  return w.length ? `<div class="warnbox">Low-confidence clip (${w.join(", ")}). If this is noise, laughter or crosstalk rather than a voice, <a class="link" onclick="ignoreSpeaker(${sp.id})">ignore it</a> so it never matches anything.</div>` : "";
 }
+async function ignoreSpeaker(id) { try { await api(`/api/speakers/${id}/ignore`, { method: "POST" }); toast("Ignored: it will not be matched or used as a print"); render(); loadStats(); } catch (e) { onErr(e); } }
+async function unignoreSpeaker(id) { try { await api(`/api/speakers/${id}/unignore`, { method: "POST" }); toast("Back in play; re-matching"); render(); loadStats(); } catch (e) { onErr(e); } }
 function candidateTable(sp, showAll = false) {
   const thr = Number(SETTINGS.match_threshold || 0.75), hi = Number(SETTINGS.confirm_threshold || 0.9), minp = Number(SETTINGS.candidate_min_prob ?? 0.5);
   if (!sp.candidates.length) return `<div class="muted">No candidates yet (nobody in the library to compare with).</div>`;
@@ -400,6 +409,9 @@ function candidateTable(sp, showAll = false) {
 function toggleWeak(id) { const holder = $(`#cands-${id}`); const sp = (STATE.src?.speakers || []).concat(STATE.reviewItems || []).find((x) => x.id === id); if (!holder || !sp) return; holder.dataset.all = holder.dataset.all ? "" : "1"; holder.innerHTML = candidateTable(sp, !!holder.dataset.all); }
 function speakerCard(sp, src, idx = 0) {
   const color = COLORS[idx % COLORS.length];
+  if (sp.ignored) return `<div class="spk ignored" id="spk-${sp.id}" style="border-left:3px solid ${color}">
+    <div class="hdr"><div><span class="title" onclick="openSpeaker(${sp.id})">${esc(sp.label)}</span> · <span class="muted">ignored (not a voice)</span></div>
+      <div class="q">speech <b>${fmtT(sp.speech_seconds)}</b> · ${sp.n_segments} turns · <button class="small" onclick="unignoreSpeaker(${sp.id})">Undo</button></div></div></div>`;
   const thr = Number(src.settings?.match_threshold ?? SETTINGS.match_threshold ?? 0.75);
   const top = sp.candidates[0];
   let verdict;
@@ -422,6 +434,7 @@ function speakerCard(sp, src, idx = 0) {
       <input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" style="max-width:260px" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)">
       <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id}, this)">${sp.person ? "Name" : "Add to library"}</button>
       ${sp.person_id ? `<button class="small" onclick="unassign(${sp.id})">Unassign / undo</button>` : ""}
+      <button class="small" onclick="ignoreSpeaker(${sp.id})" title="noise, laughter, crosstalk: drop it from matching for good">Not a voice</button>
     </div></div>`;
 }
 
@@ -555,7 +568,7 @@ async function loadPeople() {
           <div><a class="link" onclick="openSourceAt(${sp.source.id}, ${h.watch_at || 0})"><b>${esc(sp.source.name)}</b></a> <span class="muted">· ${esc(sp.label)} · ${fmtT(sp.speech_seconds)} of speech${sp.source.notes ? " · " + esc(sp.source.notes.slice(0, 80)) : ""}</span></div>
           <div class="actions" style="margin:4px 0">${watchBtn(h)}${sp.clip_url ? clip(sp.clip_url) : ""}</div>
           <div id="cands-${sp.id}">${candidateTable(sp)}</div>
-          <div class="inline" style="margin:6px 0"><input placeholder="Who is this? Type a name…" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)"><button class="small primary" onclick="nameSpeaker(${sp.id}, this)">Add</button><button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip</button></div>
+          <div class="inline" style="margin:6px 0"><input placeholder="Who is this? Type a name…" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)"><button class="small primary" onclick="nameSpeaker(${sp.id}, this)">Add</button><button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip</button><button class="small" onclick="ignoreSpeaker(${sp.id})" title="noise, laughter, crosstalk">Not a voice</button></div>
           <textarea class="notes" placeholder="Notes about this voice" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea></div></div>`; }).join("") : empty("Nothing to review. Upload a recording with the Review intent, or open a recording and press “Add voices to review queue”.");
     } else if (STATE.peopleView === "known") {
       const named = await loadNames();
@@ -766,8 +779,34 @@ async function loadSettings() {
     renderSelftest(); renderPhone(); renderVersion();
     const st = await api("/api/stats");
     $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
-    $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · calibration: ${st.calibrated ? "fitted" : "defaults"} raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;
+    $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;
+    renderCalibration(st);
   } catch (e) { onErr(e); }
+}
+async function renderCalibration(st) {
+  const el = $("#calibration"); if (!el) return;
+  try {
+    const c = await api("/api/calibration"); const av = c.available; const fit = c.fitted[st.score_mode] || c.fitted.raw;
+    const state = fit ? `<b>Fitted from your decisions</b> on ${esc((fit.created_at || "").slice(0, 16).replace("T", " "))} · ${fit.n_target} same-voice and ${fit.n_nontarget} different-voice trials · equal-error rate ${(fit.eer * 100).toFixed(1)}%`
+      : `<b>Using default constants.</b> The percentages shown everywhere are a generic guess until you calibrate.`;
+    el.innerHTML = `<p>${state}</p>
+      <p class="muted">Available now: <b>${av.labelled_speakers}</b> confirmed/named speakers across <b>${av.labelled_persons}</b> people, <b>${av.rejections}</b> rejections, <b>${av.named_persons}</b> known people. Every decision you make in a recording or the review queue adds to this.</p>
+      <div class="actions"><button class="primary" id="btn-calibrate" ${av.enough ? "" : "disabled"}>Calibrate from my decisions</button>${fit ? `<button id="btn-calib-reset">Back to defaults</button>` : ""}<span class="muted" id="calib-msg">${av.enough ? "" : "Needs at least 8 confirmed or named speakers across 2 people."}</span></div>
+      <div id="calib-result"></div>`;
+    $("#btn-calibrate").onclick = async () => {
+      $("#calib-msg").textContent = "fitting…";
+      try {
+        const r = await api("/api/calibration/decisions", { method: "POST" }); const m = r.modes[r.active_mode] || r.modes.raw;
+        $("#calib-result").innerHTML = `<div class="warnbox" style="color:var(--fg)">Done: equal-error rate <b>${(m.eer * 100).toFixed(1)}%</b>, miss rate at 1% false alarms <b>${(m.miss_at_1pct_fa * 100).toFixed(1)}%</b>, from ${r.n_target} same-voice and ${r.n_nontarget} different-voice trials. The library is being re-scored.
+          <div class="actions">Suggested match threshold <b>${pct(r.suggested_match_threshold)}</b> (about 1% false alarms) <button class="small primary" onclick="applyThreshold(${r.suggested_match_threshold})">Use it</button> <span class="muted">current ${pct(SETTINGS.match_threshold)}</span></div></div>`;
+        $("#calib-msg").textContent = ""; loadStats(); const st2 = await api("/api/stats"); renderCalibration(st2);
+      } catch (e) { $("#calib-msg").textContent = ""; onErr(e); }
+    };
+    $("#btn-calib-reset") && ($("#btn-calib-reset").onclick = async () => { try { await api("/api/calibration/reset", { method: "POST" }); toast("Back to default calibration; re-scoring"); loadStats(); renderCalibration(await api("/api/stats")); } catch (e) { onErr(e); } });
+  } catch (e) { el.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+}
+async function applyThreshold(v) {
+  try { const j = await api("/api/settings", { method: "PUT", body: { match_threshold: String(v) } }); SETTINGS = j.values; toast(`Match threshold set to ${pct(v)}`); const f = $("#settings-form [name=match_threshold]"); if (f) f.value = v; loadStats(); } catch (e) { onErr(e); }
 }
 $("#btn-save-settings").onclick = async (e) => {
   e.preventDefault(); const body = {}; $$("#settings-form [name]").forEach((i) => { body[i.name] = i.type === "checkbox" ? i.checked : i.value; });
