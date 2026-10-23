@@ -80,9 +80,10 @@ fun VoicesScreen() {
                 items(list, key = { it.id }) { p ->
                     val on = prefs.isFlagged(p, g)
                     val pkgs = p.groupIds.mapNotNull { g.groupById[it]?.name }
-                    RowItem(onClick = { editing = p }, leading = { Avatar(p.id, p.name, 40.dp, flagged = on) },
+                    RowItem(onClick = { editing = p }, leading = { Avatar(p.id, p.name, 40.dp, flagged = on, photo = p.photo) },
                         trailing = { Switch(on, { prefs.setAlertOverride(p.id, it); version++ }, colors = switchColors()) }) {
                         val meta = buildList {
+                            p.role?.let { add(it) }
                             add(if (p.local) "on this phone" else if (p.kind == "named") "known" else "unnamed")
                             add("${p.prints.size} print${if (p.prints.size == 1) "" else "s"}")
                             if (pkgs.isNotEmpty()) add(pkgs.joinToString(", "))
@@ -126,7 +127,7 @@ fun PersonSheet(p: Person, g: Gallery, prefs: Prefs, onClose: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onClose, containerColor = VF.Surface, dragHandle = { BottomSheetDefaults.DragHandle(color = VF.Surface3) }) {
         Column(Modifier.padding(20.dp, 0.dp, 20.dp, 28.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Avatar(p.id, p.name, 54.dp, flagged = on)
+                Avatar(p.id, p.name, 54.dp, flagged = on, photo = p.photo)
                 Column(Modifier.weight(1f)) {
                     Text(p.name, style = MaterialTheme.typography.headlineMedium)
                     Hint(listOfNotNull(if (p.local) "enrolled on this phone" else if (p.kind == "named") "known voice" else "unnamed voice", "${p.prints.size} prints", pkgs.takeIf { it.isNotEmpty() }?.joinToString(", ")).joinToString(" · "))

@@ -109,7 +109,7 @@ def wipe_library(conn, keep_settings: bool = True) -> dict:
             conn.execute("DELETE FROM calibrations")
         conn.execute("DELETE FROM sqlite_sequence")
         db.bump_prints_version(conn)
-    for d in (config.AUDIO_DIR, config.ORIG_DIR, config.CLIP_DIR, config.DATA_DIR / "stills", config.DATA_DIR / "transcripts"):
+    for d in (config.AUDIO_DIR, config.ORIG_DIR, config.CLIP_DIR, config.DATA_DIR / "stills", config.DATA_DIR / "transcripts", config.DATA_DIR / "photos"):
         if d.exists():
             for p in d.iterdir():
                 try:

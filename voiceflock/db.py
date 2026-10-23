@@ -66,6 +66,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sources ADD COLUMN transcript_status TEXT")
         conn.execute("ALTER TABLE sources ADD COLUMN transcript_language TEXT")
         conn.execute("ALTER TABLE sources ADD COLUMN transcript_info TEXT")
+    if "role" not in _columns(conn, "persons"):
+        conn.execute("ALTER TABLE persons ADD COLUMN role TEXT")
+        conn.execute("ALTER TABLE persons ADD COLUMN watch_reason TEXT")
+        conn.execute("ALTER TABLE persons ADD COLUMN links TEXT")
     if "description" not in _columns(conn, "sources"):
         conn.execute("ALTER TABLE sources ADD COLUMN description TEXT")
     if "alert_sound" not in _columns(conn, "persons"):

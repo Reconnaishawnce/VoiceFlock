@@ -14,6 +14,8 @@ data class Person(
     val alertMessage: String? = null,    // template with [NAME]; null = inherit
     val groupIds: List<Int> = emptyList(),
     val local: Boolean = false,          // enrolled on this phone (negative id), not yet in the laptop's library
+    val photo: String? = null,           // base64 JPEG thumbnail from the laptop's dossier, if any
+    val role: String? = null,
 )
 
 data class Group(val id: Int, val name: String, val description: String?, val alert: Boolean, val alertSound: String?, val alertMessage: String?, val n: Int)
@@ -104,7 +106,8 @@ class Gallery(
                 if (prints.isNotEmpty())
                     people.add(Person(p.getInt("id"), p.getString("name"), p.optString("kind", "named"), p.optBoolean("alert", false), prints,
                         p.optString("alert_sound", "").ifEmpty { null }.takeIf { it != "null" },
-                        p.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" }, gids))
+                        p.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" }, gids,
+                        photo = p.optString("photo", "").ifEmpty { null }.takeIf { it != "null" }, role = p.optString("role", "").ifEmpty { null }.takeIf { it != "null" }))
             }
             val groups = ArrayList<Group>()
             j.optJSONArray("groups")?.let { a -> for (k in 0 until a.length()) { val g = a.getJSONObject(k)

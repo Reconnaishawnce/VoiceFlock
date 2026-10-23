@@ -44,14 +44,15 @@ def build(conn: sqlite3.Connection, max_prints: int = 4) -> dict:
     cal = gallery.load_calibrations(conn, settings)["raw"]
     gmap = groups_of(conn)
     people = []
-    for p in db.rows(conn, "SELECT id, name, kind, alert, alert_sound, alert_message FROM persons"):
+    for p in db.rows(conn, "SELECT id, name, kind, alert, alert_sound, alert_message, role FROM persons"):
         rows = conn.execute("SELECT embedding FROM prints WHERE person_id=? ORDER BY is_mean DESC, COALESCE(quality,0) DESC LIMIT ?",
                             (p["id"], max_prints)).fetchall()
         if not rows:
             continue
         eff = effective_alert(p, gmap.get(p["id"], []), settings)
         prints = [base64.b64encode(db.emb_to_blob(gallery.l2n(db.blob_to_emb(r["embedding"])))).decode() for r in rows]
-        people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]),
+        from .dossier import thumb_b64
+        people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]), "photo": thumb_b64(int(p["id"])), "role": p["role"] if "role" in p.keys() else None,
                        "alert_sound": p["alert_sound"], "alert_message": p["alert_message"],
                        "group_ids": [g["id"] for g in gmap.get(p["id"], [])],
                        "effective_alert": eff["alert"], "spoken": eff["spoken"], "prints": prints})

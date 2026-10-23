@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS persons (
   alert_sound TEXT,                          -- siren | klaxon | chime | none | NULL = default
   alert_message TEXT,                        -- spoken on alert; [NAME] is replaced; NULL = default template
   notes TEXT,
+  role TEXT,                                 -- dossier: title / role / organisation
+  watch_reason TEXT,                         -- dossier: why this voice is on the watchlist
+  links TEXT,                                -- dossier: JSON list of URLs
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT
 );

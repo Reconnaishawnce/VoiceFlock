@@ -180,6 +180,31 @@ function heardInRich(list) {
   return list && list.length ? list.map((h) => `<div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech</span><div class="actions" style="margin:4px 0 0">${watchBtn(h)}</div>${clip(h.clip_url)}</div></div>`).join("") : `<span class="muted">(no other recordings)</span>`;
 }
 
+function watchCard(p) {
+  const img = p.photo_thumb_url ? `<img class="wl-photo" src="${esc(p.photo_thumb_url)}" alt="">` : `<div class="wl-photo glyph-wrap">${glyphSvg(p.glyph, "var(--s1)", 44)}</div>`;
+  return `<div class="wl-card" onclick="openPerson(${p.id})">${img}<div class="wl-body"><div class="wl-name">${esc(p.name)}</div>
+    <div class="sub">${p.role ? esc(p.role) : (p.groups || []).join(", ") || (p.kind === "named" ? "known voice" : "unnamed voice")}</div>
+    <div class="sub">${p.last_heard_ms ? `heard ${ago(p.last_heard_ms)}` : "not heard yet"} · ${p.n_sources} rec · ${p.sightings_total} live${p.via && p.via !== "person" ? ` · via ${esc(p.via)}` : ""}</div>
+    ${p.watch_reason ? `<div class="wl-why">${esc(p.watch_reason.length > 110 ? p.watch_reason.slice(0, 110) + "…" : p.watch_reason)}</div>` : ""}</div></div>`;
+}
+function ago(ms) { const d = (Date.now() - ms) / 1000; if (d < 90) return "just now"; if (d < 5400) return `${Math.round(d / 60)} min ago`; if (d < 172800) return `${Math.round(d / 3600)} h ago`; return `${Math.round(d / 86400)} days ago`; }
+function photoBlock(p) {
+  const img = p.photo_url ? `<img class="photo" src="${esc(p.photo_url)}" alt="">` : glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 56);
+  const stills = (p.heard_in || []).filter((h) => h.still_url && h.media_kind === "video").slice(0, 6);
+  return `<div class="photo-wrap">${img}<div class="photo-actions">
+    <label class="small btnlike">${p.photo_url ? "Replace" : "Add photo"}<input type="file" accept="image/*" hidden onchange="uploadPhoto(${p.id}, this.files[0])"></label>
+    ${stills.length ? `<details class="stillpick"><summary class="small btnlike">from a still</summary><div class="strip">${stills.map((h) => `<img class="thumb" src="${esc(h.still_url)}" title="${esc(h.name)}" onclick="photoFromStill(${p.id}, ${h.id}, ${h.watch_at ?? 0}, ${JSON.stringify(h.still_url)})">`).join("")}</div></details>` : ""}
+    ${p.photo_url ? `<button class="small" onclick="removePhoto(${p.id})">remove</button>` : ""}</div></div>`;
+}
+async function uploadPhoto(pid, file) { if (!file) return; const fd = new FormData(); fd.append("file", file); try { const r = await fetch(`/api/persons/${pid}/photo`, { method: "POST", body: fd }); if (!r.ok) throw new Error((await r.json()).detail || r.statusText); toast("Photo saved"); render(); } catch (e) { onErr(e); } }
+async function photoFromStill(pid, sid, t, stillUrl) { try { await api(`/api/persons/${pid}/photo/from_still`, { method: "POST", body: { source_id: sid, t, still_url: stillUrl } }); toast("Photo set from the recording"); render(); } catch (e) { onErr(e); } }
+async function removePhoto(pid) { try { await api(`/api/persons/${pid}/photo`, { method: "DELETE" }); toast("Photo removed"); render(); } catch (e) { onErr(e); } }
+async function patchPerson(pid, body) { try { await api(`/api/persons/${pid}`, { method: "PATCH", body }); toast("Saved"); } catch (e) { onErr(e); } }
+function timelineRow(t) {
+  const d = new Date(t.at_ms); const when = t.at_ms ? `${d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined })} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : "";
+  if (t.kind === "recording") return `<div class="item sighting"><div class="title">🎞 <a class="link" onclick="openSourceAt(${t.source_id}, ${t.watch_at ?? 0})">${esc(t.label)}</a> <span class="muted">· ${fmtT(t.speech_seconds || 0)} of speech${t.assignment && t.assignment !== "auto" ? " · " + esc(t.assignment) : ""}</span></div><div class="sub">${when} · added to the library</div></div>`;
+  return `<div class="item sighting"><div class="title">${t.kind === "phone" ? "📱" : "💻"} ${esc(t.label)}${t.flagged ? ' <span class="bell on">🔔</span>' : ""} <span class="prob ${(t.probability || 0) >= 0.9 ? "hi" : "mid"}">${pct(t.probability || 0)}</span></div><div class="sub">${when}</div></div>`;
+}
 function sightingRow(x) {
   const d = new Date(x.at_ms); const when = `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
   const where = x.kind === "phone" ? "📱 phone" : x.kind === "live" ? "💻 laptop" : `🎞 ${esc(x.source_name || "recording")}`;
@@ -662,7 +687,13 @@ async function loadPeople() {
   const q = $("#person-search").value.trim().toLowerCase(); const el = $("#people-content");
   if (!el.innerHTML) el.innerHTML = skeleton(5);
   try {
-    if (STATE.peopleView === "review") {
+    if (STATE.peopleView === "watchlist") {
+      const j = await api("/api/watchlist");
+      $$("#people-seg button").find((b) => b.dataset.view === "watchlist").textContent = `Watchlist (${j.people.length})`;
+      const list = j.people.filter((p) => p.name.toLowerCase().includes(q) || (p.role || "").toLowerCase().includes(q));
+      el.innerHTML = list.length ? `<p class="muted">Everyone who raises an alert, newest sighting first. Open a card for the full dossier: photo, role, why you watch them, links, what they said, and every time they were heard.</p><div class="wl-grid">${list.map(watchCard).join("")}</div>`
+        : empty("Nobody on the watchlist yet. Flip the 🔔 on a person or a package to add them.");
+    } else if (STATE.peopleView === "review") {
       const j = await api("/api/review?limit=40"); STATE.reviewItems = j.items; await loadNames();
       $$("#people-seg button")[0].textContent = `To review (${j.total})`;
       el.innerHTML = j.items.length ? `<p class="muted">Voices you asked to label. Watch, type a name (Enter saves), or skip. Naming or confirming removes the item.</p>` + j.items.map((sp) => {
@@ -762,9 +793,9 @@ async function loadPersonDetail(id) {
     const el = $("#people-detail");
     el.innerHTML = `<button class="back" onclick="back('people')">← Back</button>
       <div class="card">
-        <div class="profile">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 56)}
+        <div class="profile">${photoBlock(p)}
           <div><h2>${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span>${bell(p)}</h2>
-          <div class="meta">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints${p.notes ? " · " + esc(p.notes) : ""}</div></div>
+          <div class="meta">${p.role ? `<b>${esc(p.role)}</b> · ` : ""}${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints${p.last_heard_ms ? ` · last heard ${ago(p.last_heard_ms)}` : ""}${p.sightings_7d ? ` · ${p.sightings_7d} live hits this week` : ""}</div></div>
           <div class="actions" style="margin-left:auto">${p.kind === "provisional" ? `<input id="pn-${p.id}" placeholder="Name this voice" list="person-names" style="max-width:200px" onkeydown="if(event.key==='Enter')namePerson(${p.id}, this)"><button class="small primary" onclick="namePerson(${p.id}, this)">Name</button><button class="small" onclick="acceptPerson(${p.id})">Keep</button>` : `<button class="small" onclick="renamePerson(${p.id})">Rename</button>`}<button class="small danger" onclick="deletePerson(${p.id})">Delete</button></div>
         </div>
         <div class="sub" style="margin:6px 0">Packages: ${(p.groups || []).map((g) => `<span class="pill ${g.alert ? "named" : ""}" title="${g.alert ? "this package alerts" : ""}">${esc(g.name)} <a class="link" onclick="removeFromGroup(${g.id}, ${p.id})" title="remove">✕</a></span>`).join(" ") || '<span class="muted">none</span>'}
@@ -777,8 +808,16 @@ async function loadPersonDetail(id) {
             <button class="small primary" onclick="saveAlertSettings(${p.id})">Save</button><button class="small" onclick="testAlert(${p.id})">▶ Test</button></div>
           <div class="sub">Will say: “${esc(p.spoken)}”. <code>[NAME]</code> = ${esc(p.name)}; empty = default from Settings.</div>
         </details>
-        <textarea class="notes" placeholder="Notes about this person (role, context, links…)" onblur="savePersonNotes(${p.id}, this.value)">${esc(p.notes || "")}</textarea>
-        ${(p.sightings || []).length ? `<h3>Timeline <span class="muted" style="text-transform:none;letter-spacing:0">· live on the laptop, on the phone, in new recordings</span></h3><div class="timeline-list">${p.sightings.slice(0, 15).map(sightingRow).join("")}</div>` : ""}
+        <div class="dossier">
+          <div class="inline" style="flex-wrap:wrap"><input id="role-${p.id}" placeholder="Role · e.g. U.S. Senator (D-MA)" value="${esc(p.role || "")}" style="flex:1 1 260px" onblur="patchPerson(${p.id}, {role: this.value})">
+            <input id="links-${p.id}" placeholder="Links, separated by spaces (Wikipedia, official page, …)" value="${esc((p.links || []).join(" "))}" style="flex:2 1 320px" onblur="patchPerson(${p.id}, {links: this.value.split(/\s+/).filter(Boolean)})"></div>
+          ${(p.links || []).length ? `<div class="sub" style="margin:4px 0">${p.links.map((u) => `<a class="link" href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 50))}</a>`).join(" · ")}</div>` : ""}
+          <textarea class="notes" placeholder="Why this voice is on your watchlist (context, what to listen for, history…)" onblur="patchPerson(${p.id}, {watch_reason: this.value})">${esc(p.watch_reason || "")}</textarea>
+          <textarea class="notes" placeholder="Notes (anything else)" onblur="savePersonNotes(${p.id}, this.value)">${esc(p.notes || "")}</textarea>
+          <div class="actions"><a class="link" href="/api/persons/${p.id}/dossier" target="_blank">Open printable dossier</a> · <a class="link" href="/api/persons/${p.id}/dossier?format=md">download .md</a></div>
+        </div>
+        ${(p.quotes || []).length ? `<h3>In their words <span class="muted" style="text-transform:none;letter-spacing:0">· from the transcripts</span></h3><div class="quotes">${p.quotes.map((q) => `<div class="quote" onclick="openSourceAt(${q.source_id}, ${q.start_s})"><span class="tr-x">“${esc(q.text.length > 260 ? q.text.slice(0, 260) + "…" : q.text)}”</span><span class="sub">${esc(q.source_name)} · ${fmtT(q.start_s)}</span></div>`).join("")}</div>` : ""}
+        ${(p.timeline || []).length ? `<h3>Timeline <span class="muted" style="text-transform:none;letter-spacing:0">· recordings, laptop Live hits, phone hits</span></h3><div class="timeline-list">${p.timeline.slice(0, 40).map(timelineRow).join("")}</div>` : ""}
         <h3>Heard in ${p.heard_in.length} recordings</h3>
         ${p.heard_in.map((h) => `<div class="appear"><div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})"><b>${esc(h.name)}</b></a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech · <span class="pill">${esc(h.assignment)}</span></span>${clip(h.clip_url)}</div></div>
           <div class="actions">${watchBtn(h)}<button class="small" onclick="unassign(${h.speaker_id})" title="This recording is not them">Not them</button></div></div>`).join("") || '<p class="muted">No recordings yet (enrolled from the command line or imported).</p>'}

@@ -330,6 +330,15 @@ Nothing is named automatically.
 Settings → *Name suggestions* shows whether OCR and the model are ready, and *Suggest names for all
 recordings* backfills the library. Each recording also has a *Suggest names* button.
 
+## Watchlist dossiers
+
+People → **Watchlist** lists everyone who raises an alert (own 🔔 or via a package) as cards: photo, role,
+why you watch them, when they were last heard. Open one for the dossier: a **photo** (upload one, or pick a
+video still from a recording they appear in; it also shows on the phone), **role**, **why you're watching**,
+**links**, notes, **In their words** (their longest transcript lines, click to play), and a **Timeline** of
+every recording they were in plus every laptop Live and phone hit. *Open printable dossier* renders a
+self-contained page you can print to PDF or share; *download .md* gives the same as Markdown.
+
 ## Merge review (look-alikes)
 
 People → *Possible duplicates* is a side-by-side review: for each pair of voices that may be one person

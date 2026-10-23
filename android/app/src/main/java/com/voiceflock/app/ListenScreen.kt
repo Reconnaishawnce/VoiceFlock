@@ -97,7 +97,8 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
 
 @Composable
 private fun SightingRow(s: Sighting, thr: Float) {
-    RowItem(leading = { Avatar(s.personId, s.name, 38.dp, flagged = s.flagged) },
+    val photo = AppState.gallery.value?.people?.firstOrNull { it.id == s.personId }?.photo
+    RowItem(leading = { Avatar(s.personId, s.name, 38.dp, flagged = s.flagged, photo = photo) },
         trailing = {
             Column(horizontalAlignment = Alignment.End) {
                 Text("${(s.probability * 100).toInt()}%", color = probColor(s.probability, thr), fontWeight = FontWeight.SemiBold)
@@ -133,7 +134,7 @@ fun NowCard(d: Detection?, listening: Boolean, thr: Float, g: Gallery?) {
                     Label(if (d.alert) "Flagged voice" else if (top.flagged) "Flagged · below threshold" else if (top.probability >= thr) "Recognised" else "Closest voice",
                         color = if (d.alert) VF.Amber else VF.Muted)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Avatar(top.person.id, top.person.name, 46.dp, flagged = top.flagged)
+                        Avatar(top.person.id, top.person.name, 46.dp, flagged = top.flagged, photo = top.person.photo)
                         Column(Modifier.weight(1f)) {
                             Text(top.person.name, style = MaterialTheme.typography.displayMedium, maxLines = 1)
                             Text("${(top.probability * 100).toInt()}% · this window ${(top.instant * 100).toInt()}%", color = VF.Muted, style = MaterialTheme.typography.bodySmall)
@@ -184,7 +185,7 @@ fun IdentifySheet(state: IdentifyState, onClose: () -> Unit) {
                     Hint("${"%.1f".format(state.speechS)} s of speech, scored against ${g?.people?.size ?: 0} voices. Adding it teaches this phone now and the laptop after “Share my edits”.")
                     if (state.top.isEmpty()) Empty("The library is empty. Enroll this voice below.")
                     state.top.forEach { m ->
-                        RowItem(leading = { Avatar(m.person.id, m.person.name, 40.dp) }, trailing = {
+                        RowItem(leading = { Avatar(m.person.id, m.person.name, 40.dp, photo = m.person.photo) }, trailing = {
                             TextButton(onClick = {
                                 LocalPrints.addToPerson(ctx, m.person.id, m.person.name, state.embedding); reloadGallery(ctx)
                                 android.widget.Toast.makeText(ctx, "Added a print to ${m.person.name}", android.widget.Toast.LENGTH_SHORT).show(); onClose()

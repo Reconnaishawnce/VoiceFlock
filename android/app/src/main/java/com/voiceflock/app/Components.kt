@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,12 +64,24 @@ fun initials(name: String): String {
     return (parts.first().take(1) + (parts.getOrNull(1)?.take(1) ?: "")).uppercase()
 }
 
+private val photoCache = HashMap<String, androidx.compose.ui.graphics.ImageBitmap?>()
+fun decodePhoto(b64: String?): androidx.compose.ui.graphics.ImageBitmap? {
+    if (b64.isNullOrEmpty()) return null
+    photoCache[b64]?.let { return it }
+    return try {
+        val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
+    } catch (_: Exception) { null }.also { photoCache[b64] = it }
+}
+
 @Composable
-fun Avatar(id: Int, name: String, size: Dp = 40.dp, flagged: Boolean = false) {
+fun Avatar(id: Int, name: String, size: Dp = 40.dp, flagged: Boolean = false, photo: String? = null) {
     val c = VF.colorFor(id)
+    val bmp = remember(photo) { decodePhoto(photo) }
     Box(contentAlignment = Alignment.Center) {
         Box(Modifier.size(size).clip(CircleShape).background(c.copy(alpha = .22f)), contentAlignment = Alignment.Center) {
-            Text(initials(name), color = c, fontWeight = FontWeight.SemiBold, fontSize = (size.value * .36f).sp)
+            if (bmp != null) androidx.compose.foundation.Image(bmp, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+            else Text(initials(name), color = c, fontWeight = FontWeight.SemiBold, fontSize = (size.value * .36f).sp)
         }
         if (flagged) Box(Modifier.align(Alignment.BottomEnd).size(size * .34f).clip(CircleShape).background(VF.Surface).padding(2.dp)) {
             Box(Modifier.fillMaxSize().clip(CircleShape).background(VF.Amber))

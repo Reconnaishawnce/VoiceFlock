@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, selfcal, sightings as sightings_mod, stills, suggest, transcribe, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, dossier, feeds, gallery, live, mobile, onnx_export, selfcal, sightings as sightings_mod, stills, suggest, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -38,6 +38,9 @@ class PersonIn(BaseModel):
 class PersonPatch(BaseModel):
     name: str | None = None
     notes: str | None = None
+    role: str | None = None
+    watch_reason: str | None = None
+    links: list[str] | None = None
     alert: bool | None = None
     alert_sound: str | None = None      # siren | klaxon | chime | none | "" (= default)
     alert_message: str | None = None    # "" = default template
@@ -62,6 +65,12 @@ class GroupPatch(BaseModel):
 
 class MembersIn(BaseModel):
     person_ids: list[int]
+
+
+class StillPickIn(BaseModel):
+    source_id: int
+    t: float = 0.0
+    still_url: str | None = None
 
 
 class PairIn(BaseModel):
@@ -311,6 +320,11 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         p["heard_in"] = person_sources(conn, p["id"], limit=50)
         p["glyph"] = person_glyph(conn, p["id"])
         p["sightings"] = sightings_mod.list_(conn, person_id=p["id"], limit=40)
+        p["photo_url"], p["photo_thumb_url"] = dossier.photo_urls(int(p["id"]))
+        p["links"] = dossier.links_of(p)
+        p["timeline"] = dossier.timeline(conn, int(p["id"]))
+        p["quotes"] = dossier.quotes(conn, int(p["id"]))
+        p.update(dossier.summary(conn, int(p["id"])))
         p["groups"] = db.rows(conn, "SELECT g.id, g.name, g.alert FROM person_groups pg JOIN groups g ON g.id=pg.group_id WHERE pg.person_id=? ORDER BY g.name", (p["id"],))
         p["effective"] = mobile.effective_alert(p, p["groups"] and db.rows(conn,
             "SELECT g.* FROM person_groups pg JOIN groups g ON g.id=pg.group_id WHERE pg.person_id=? ORDER BY g.id", (p["id"],)) or [],
@@ -906,6 +920,75 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         return p
 
 
+    @app.post("/api/persons/{pid}/photo")
+    async def upload_photo(pid: int, file: UploadFile = File(...), conn=Depends(get_conn)):
+        if not db.row(conn, "SELECT id FROM persons WHERE id=?", (pid,)):
+            raise HTTPException(404)
+        data = await file.read()
+        if len(data) > 15_000_000:
+            raise HTTPException(400, "image too large")
+        try:
+            info = dossier.save_photo(pid, data)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"not an image: {e}")
+        mobile.mark_dirty(conn)
+        return {"ok": True, **info, "photo_url": dossier.photo_urls(pid)[0]}
+
+    @app.post("/api/persons/{pid}/photo/from_still")
+    def photo_from_still(pid: int, body: StillPickIn, conn=Depends(get_conn)):
+        """Use a frame of a recording (at time t) as the person's photo."""
+        src = db.row(conn, "SELECT * FROM sources WHERE id=?", (body.source_id,))
+        if not src or not db.row(conn, "SELECT id FROM persons WHERE id=?", (pid,)):
+            raise HTTPException(404)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "frame.jpg"
+            ok = False
+            if src["orig_path"] and Path(src["orig_path"]).exists() and Path(src["orig_path"]).suffix.lower() in VIDEO_EXTS:
+                ok = stills.extract_frame(Path(src["orig_path"]), float(body.t), out, width=960)
+            elif body.still_url:
+                p = stills.still_dir() / body.still_url.split("/stills/")[-1].split("?")[0]
+                if p.exists():
+                    out = p; ok = True
+            if not ok:
+                raise HTTPException(400, "no frame available: the recording has no local video (YouTube stills are too small for a photo)")
+            info = dossier.save_photo(pid, out.read_bytes())
+        mobile.mark_dirty(conn)
+        return {"ok": True, **info, "photo_url": dossier.photo_urls(pid)[0]}
+
+    @app.delete("/api/persons/{pid}/photo")
+    def remove_photo(pid: int, conn=Depends(get_conn)):
+        dossier.delete_photo(pid)
+        mobile.mark_dirty(conn)
+        return {"ok": True}
+
+    @app.get("/api/persons/{pid}/dossier")
+    def person_dossier(pid: int, format: str = "html", conn=Depends(get_conn)):
+        p = get_person(pid, conn)
+        safe = re.sub(r"[^\w\- ]+", "", p["name"]).strip().replace(" ", "_") or f"person_{pid}"
+        if format == "md":
+            return Response(dossier.render_markdown(p), media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{safe}.md"'})
+        return Response(dossier.render_html(p), media_type="text/html; charset=utf-8", headers={"Content-Disposition": f'inline; filename="{safe}.html"'})
+
+    @app.get("/api/watchlist")
+    def watchlist(conn=Depends(get_conn)):
+        """Everyone who alerts (own flag or via a package), as dossier cards ordered by last heard."""
+        settings = config.Settings(conn)
+        gmap = mobile.groups_of(conn)
+        out = []
+        for p in db.rows(conn, "SELECT * FROM persons ORDER BY name"):
+            eff = mobile.effective_alert(dict(p), gmap.get(int(p["id"]), []), settings)
+            if not eff["alert"]:
+                continue
+            d = {"id": p["id"], "name": p["name"], "kind": p["kind"], "role": p["role"], "watch_reason": p["watch_reason"], "via": eff["via"], "sound": eff["sound"],
+                 "n_sources": conn.execute("SELECT COUNT(DISTINCT source_id) FROM source_speakers WHERE person_id=?", (p["id"],)).fetchone()[0],
+                 "groups": [g["name"] for g in gmap.get(int(p["id"]), [])], "glyph": person_glyph(conn, int(p["id"]))}
+            d["photo_url"], d["photo_thumb_url"] = dossier.photo_urls(int(p["id"]))
+            d.update(dossier.summary(conn, int(p["id"])))
+            out.append(d)
+        out.sort(key=lambda d: -(d["last_heard_ms"] or 0))
+        return {"people": out}
+
     @app.patch("/api/persons/{pid}")
     def patch_person(pid: int, body: PersonPatch, conn=Depends(get_conn)):
         p = db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,))
@@ -926,6 +1009,12 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                     queue_rematch(conn)
             if body.notes is not None:
                 conn.execute("UPDATE persons SET notes=? WHERE id=?", (body.notes, pid))
+            if body.role is not None:
+                conn.execute("UPDATE persons SET role=? WHERE id=?", (body.role.strip() or None, pid))
+            if body.watch_reason is not None:
+                conn.execute("UPDATE persons SET watch_reason=? WHERE id=?", (body.watch_reason.strip() or None, pid))
+            if body.links is not None:
+                conn.execute("UPDATE persons SET links=? WHERE id=?", (json.dumps([u.strip() for u in body.links if u.strip()]), pid))
             if body.alert is not None:
                 conn.execute("UPDATE persons SET alert=? WHERE id=?", (int(body.alert), pid))
             if body.alert_sound is not None:
@@ -1631,6 +1720,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     config.ensure_dirs()
     app.mount("/clips", StaticFiles(directory=str(config.CLIP_DIR)), name="clips")
     app.mount("/stills", StaticFiles(directory=str(stills.still_dir())), name="stills")
+    app.mount("/photos", StaticFiles(directory=str(dossier.photo_dir())), name="photos")
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     @app.get("/")
