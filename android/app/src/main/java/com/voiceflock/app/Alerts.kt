@@ -79,6 +79,35 @@ object Alerts {
         val sr = 22050
         return when (kind) {
             "none" -> ShortArray(0)
+            "horn" -> ShortArray((sr * 5.8).toInt()).also { buf ->   // two-tone emergency horn, 0.7 s per tone, 8 tones
+                var ph = 0.0
+                for (i in buf.indices) { val t = i.toDouble() / sr; val k = (t / 0.7).toInt(); val tt = t - k * 0.7
+                    val f = if (k % 2 == 0) 330.0 else 415.0; ph += 2 * PI * f / sr
+                    val env = if (tt < 0.05) tt / 0.05 else if (tt > 0.6) ((0.66 - tt) / 0.06).coerceIn(0.0, 1.0) else 1.0
+                    val v = (sin(ph) + 0.6 * sin(2 * ph) + 0.4 * sin(3 * ph) + 0.3 * (if (sin(ph / 2) >= 0) 1.0 else -1.0)) / 2.3
+                    buf[i] = (v * env * 0.9 * 32767).toInt().coerceIn(-32767, 32767).toShort() }
+            }
+            "vault" -> ShortArray(sr * 7).also { buf ->              // blast door: sub thump, clank, grinding sweep, hiss
+                val r = java.util.Random(7); var ph = 0.0; var subPh = 0.0; var lfo = 0.0
+                var ring1 = 0.0; var ring2 = 0.0; var lpState = 0.0
+                for (i in buf.indices) { val t = i.toDouble() / sr; var v = 0.0
+                    if (t < 1.5) { val f = 60 * Math.pow(0.5, t / 1.2); subPh += 2 * PI * f / sr; v += sin(subPh) * Math.exp(-t * 3.0) * 1.0 }
+                    if (t in 0.05..0.95) { val n = r.nextGaussian() * 0.6; ring1 = ring1 * 0.995 + n * 0.02; ring2 = ring2 * 0.992 + n * 0.015
+                        v += (ring1 * sin(2 * PI * 1900 * t) + ring2 * sin(2 * PI * 2600 * t)) * 8 * Math.exp(-(t - 0.05) * 4) }
+                    if (t in 0.8..6.1) { val tt = t - 0.8; val f = 70 + 80 * (tt / 5.0).coerceAtMost(1.0); ph += 2 * PI * f / sr; lfo += 2 * PI * (9 + 9 * tt / 5.0) / sr
+                        val saw = ((ph / (2 * PI)) % 1.0) * 2 - 1; val cutoff = 0.02 + 0.08 * (tt / 5.0); lpState += cutoff * (saw - lpState)
+                        val env = (if (tt < 0.8) tt / 0.8 else if (tt > 4.4) ((5.3 - tt) / 0.9).coerceIn(0.0, 1.0) else 1.0)
+                        v += lpState * env * 0.55 * (1 + 0.3 * sin(lfo)) }
+                    if (t > 5.6) { v += r.nextGaussian() * 0.12 * Math.exp(-(t - 5.6) * 2.5) }
+                    buf[i] = (v * 32767).toInt().coerceIn(-32767, 32767).toShort() }
+            }
+            "radar" -> ShortArray((sr * 5.2).toInt()).also { buf ->  // phone-style alarm: 4 pips, pause, ×4
+                var ph = 0.0
+                for (i in buf.indices) { val t = i.toDouble() / sr; val rep = (t / 1.3).toInt(); val tt = t - rep * 1.3; val pip = (tt / 0.16).toInt()
+                    val on = rep < 4 && pip < 4 && (tt - pip * 0.16) < 0.09
+                    val f = if (pip % 2 == 0) 1000.0 else 1250.0; ph += 2 * PI * f / sr
+                    buf[i] = (if (on) (if (sin(ph) >= 0) 0.5 else -0.5) * 32767 * 0.5 else 0.0).toInt().toShort() }
+            }
             "klaxon" -> ShortArray(sr * 4).also { buf ->   // pulsed 330 Hz buzzer, 0.3 s on / 0.2 s off
                 var ph = 0.0
                 for (i in buf.indices) { val on = (i % (sr / 2)) < sr * 3 / 10; ph += 2 * PI * 330 / sr

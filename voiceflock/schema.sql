@@ -173,3 +173,19 @@ CREATE TABLE IF NOT EXISTS feed_items (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   UNIQUE(feed_id, guid)
 );
+
+-- Packages: groups of voices with bulk alert settings (e.g. "Politicians").
+CREATE TABLE IF NOT EXISTS groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  alert INTEGER NOT NULL DEFAULT 0,
+  alert_sound TEXT,
+  alert_message TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS person_groups (
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  PRIMARY KEY (person_id, group_id)
+);

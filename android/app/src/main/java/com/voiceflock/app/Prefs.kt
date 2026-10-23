@@ -50,10 +50,61 @@ class Prefs(context: Context) {
     fun setSoundOverride(personId: Int, snd: String?) =
         sp.edit().apply { if (snd.isNullOrBlank()) remove("snd_$personId") else putString("snd_$personId", snd) }.apply()
 
-    /** Resolve what to play/say for a person: phone override > library per-person > phone default > library default. */
-    fun soundFor(p: Person, g: Gallery): String = soundOverride(p.id) ?: p.alertSound ?: g.defaultSound
-    fun messageFor(p: Person, g: Gallery): String =
-        Gallery.render(messageOverride(p.id) ?: p.alertMessage ?: defaultMessage.ifBlank { g.defaultMessage }, p.name)
+    // ---- package (group) overrides made on the phone
+    fun groupAlertOverride(gid: Int): Boolean? = if (sp.contains("galert_$gid")) sp.getBoolean("galert_$gid", false) else null
+    fun setGroupAlertOverride(gid: Int, on: Boolean) = sp.edit().putBoolean("galert_$gid", on).apply()
+    fun groupSoundOverride(gid: Int): String? = sp.getString("gsnd_$gid", null)
+    fun setGroupSoundOverride(gid: Int, v: String?) = sp.edit().apply { if (v.isNullOrBlank()) remove("gsnd_$gid") else putString("gsnd_$gid", v) }.apply()
+    fun groupMessageOverride(gid: Int): String? = sp.getString("gmsg_$gid", null)
+    fun setGroupMessageOverride(gid: Int, v: String?) = sp.edit().apply { if (v.isNullOrBlank()) remove("gmsg_$gid") else putString("gmsg_$gid", v) }.apply()
+
+    fun groupAlert(g: Group): Boolean = groupAlertOverride(g.id) ?: g.alert
+    fun groupSound(g: Group): String? = groupSoundOverride(g.id) ?: g.alertSound
+    fun groupMessage(g: Group): String? = groupMessageOverride(g.id) ?: g.alertMessage
+
+    /** Does this voice alert? phone person override > person flag > any alerting package > "alert all known". */
+    fun isFlagged(p: Person, g: Gallery): Boolean {
+        alertOverride(p.id)?.let { return it }
+        if (p.alertDefault) return true
+        if (p.groupIds.any { gid -> g.groupById[gid]?.let { groupAlert(it) } == true }) return true
+        return alertAllKnown && p.kind == "named"
+    }
+
+    /** Resolve what to play/say: phone person override > person > first package with a value > phone default > library default. */
+    fun soundFor(p: Person, g: Gallery): String =
+        soundOverride(p.id) ?: p.alertSound ?: p.groupIds.firstNotNullOfOrNull { gid -> g.groupById[gid]?.let { groupSound(it) } } ?: g.defaultSound
+    fun messageFor(p: Person, g: Gallery): String = Gallery.render(
+        messageOverride(p.id) ?: p.alertMessage ?: p.groupIds.firstNotNullOfOrNull { gid -> g.groupById[gid]?.let { groupMessage(it) } }
+            ?: defaultMessage.ifBlank { g.defaultMessage }, p.name)
+
+    /** Where the library can be fetched from without the laptop (Dropbox / Drive / GitHub link). */
+    var libraryUrl: String
+        get() = sp.getString("library_url", "") ?: ""
+        set(v) = sp.edit().putString("library_url", v.trim()).apply()
+    var autoFetch: Boolean
+        get() = sp.getBoolean("auto_fetch", true)
+        set(v) = sp.edit().putBoolean("auto_fetch", v).apply()
+    var libraryEtag: String
+        get() = sp.getString("library_etag", "") ?: ""
+        set(v) = sp.edit().putString("library_etag", v).apply()
+
+    /** Everything edited on this phone, as JSON the laptop can import. */
+    fun exportEdits(g: Gallery?): String {
+        val persons = org.json.JSONObject(); val groups = org.json.JSONObject()
+        for ((k, v) in sp.all) {
+            val id = k.substringAfter("_", "").toIntOrNull() ?: continue
+            when {
+                k.startsWith("alert_") -> persons.optJSONObject(id.toString())?.put("alert", v) ?: persons.put(id.toString(), org.json.JSONObject().put("alert", v))
+                k.startsWith("snd_") -> persons.optJSONObject(id.toString())?.put("sound", v) ?: persons.put(id.toString(), org.json.JSONObject().put("sound", v))
+                k.startsWith("msg_") -> persons.optJSONObject(id.toString())?.put("message", v) ?: persons.put(id.toString(), org.json.JSONObject().put("message", v))
+                k.startsWith("galert_") -> groups.optJSONObject(id.toString())?.put("alert", v) ?: groups.put(id.toString(), org.json.JSONObject().put("alert", v))
+                k.startsWith("gsnd_") -> groups.optJSONObject(id.toString())?.put("sound", v) ?: groups.put(id.toString(), org.json.JSONObject().put("sound", v))
+                k.startsWith("gmsg_") -> groups.optJSONObject(id.toString())?.put("message", v) ?: groups.put(id.toString(), org.json.JSONObject().put("message", v))
+            }
+        }
+        return org.json.JSONObject().put("format", "voiceflock-phone-settings").put("library_generated_at", g?.generatedAt ?: "")
+            .put("persons", persons).put("groups", groups).toString(1)
+    }
 
     /** Per-person alert flag set on the phone; absent = use the server's flag. */
     fun alertOverride(personId: Int): Boolean? =

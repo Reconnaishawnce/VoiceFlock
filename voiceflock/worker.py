@@ -130,6 +130,13 @@ def worker_loop(stop: threading.Event | None = None, poll_s: float = 1.5, name: 
                     log.info("feeds: queued %d new items", n)
             except Exception as e:  # noqa: BLE001
                 log.warning("feed poll failed: %s", e)
+            try:
+                from .mobile import export_if_dirty
+                out = export_if_dirty(conn)
+                if out:
+                    log.info("phone library exported to %s", out)
+            except Exception as e:  # noqa: BLE001
+                log.warning("library export failed: %s", e)
         try:
             job = claim_job(conn, name)
         except Exception as e:  # noqa: BLE001

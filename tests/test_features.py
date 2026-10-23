@@ -206,7 +206,7 @@ def test_export_import_roundtrip(client, conn):
     # import into a second database: Alice merges by name, unknown voice is created
     conn.execute("DELETE FROM persons WHERE id=?", (u,))
     stats = transfer.import_gallery(conn, data)
-    assert stats == {"persons_created": 1, "persons_merged": 1, "prints": 3, "cohort": 1, "calibrations": 1}
+    assert stats == {"persons_created": 1, "persons_merged": 1, "prints": 3, "cohort": 1, "calibrations": 1, "package": None}
     assert conn.execute("SELECT COUNT(*) FROM prints WHERE person_id=?", (pid,)).fetchone()[0] == 4
     assert conn.execute("SELECT COUNT(*) FROM calibrations WHERE active=1").fetchone()[0] == 1
     # via the API upload path

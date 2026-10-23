@@ -58,7 +58,7 @@ class ListenService : Service() {
         }
         AppState.gallery.value = gallery
         val threshold = if (prefs.thresholdOverride > 0f) prefs.thresholdOverride else gallery.threshold
-        val flagged: (Person) -> Boolean = { p -> prefs.alertOverride(p.id) ?: (p.alertDefault || (prefs.alertAllKnown && p.kind == "named")) }
+        val flagged: (Person) -> Boolean = { p -> prefs.isFlagged(p, gallery) }
         running = true
         AppState.listening.value = true
         AppState.status.value = "loading model…"

@@ -266,9 +266,13 @@ def build_cohort(conn: sqlite3.Connection, settings: config.Settings) -> Cohort:
 
 def load_gallery(conn: sqlite3.Connection, settings: config.Settings | None = None) -> Gallery:
     settings = settings or config.Settings(conn)
-    persons = {int(r["id"]): {"name": r["name"], "kind": r["kind"], "alert": bool(r["alert"]),
-                              "alert_sound": r["alert_sound"], "alert_message": r["alert_message"]}
-               for r in conn.execute("SELECT id, name, kind, alert, alert_sound, alert_message FROM persons")}
+    from .mobile import effective_alert, groups_of
+    gmap = groups_of(conn)
+    persons = {}
+    for r in conn.execute("SELECT id, name, kind, alert, alert_sound, alert_message FROM persons"):
+        eff = effective_alert(dict(r), gmap.get(int(r["id"]), []), settings)
+        persons[int(r["id"])] = {"name": r["name"], "kind": r["kind"], "alert": eff["alert"], "alert_via": eff["via"],
+                                 "alert_sound": eff["sound"], "alert_message": eff["message"]}
     rows = conn.execute("SELECT id, person_id, source_id, embedding FROM prints").fetchall()
     if rows:
         emb = l2n(np.stack([db.blob_to_emb(r["embedding"]) for r in rows]))

@@ -107,7 +107,7 @@
     <div id="people-list">
       <div class="card">
         <div class="hdr">
-          <div class="seg" id="people-seg"><button data-view="known">Known</button><button data-view="unnamed">Unnamed voices</button><button data-view="dups">Possible duplicates</button></div>
+          <div class="seg" id="people-seg"><button data-view="known">Known</button><button data-view="unnamed">Unnamed voices</button><button data-view="packages">Packages</button><button data-view="dups">Possible duplicates</button></div>
           <div class="actions" style="margin:0"><input id="person-search" placeholder="search…" style="max-width:220px"><button class="small" id="btn-new-person">+ Identify someone</button></div>
         </div>
         <details id="identify-box"><summary>Identify someone from reference audio</summary>
@@ -151,6 +151,12 @@
       <details open><summary><b>Phone app</b></summary>
         <p class="muted">Listens offline and performs the alert when a <b>flagged</b> voice (🔔 on a person) is heard. Install with Obtainium from <code>github.com/Reconnaishawnce/VoiceFlock</code>.</p>
         <p><b>Simplest:</b> <a class="link" href="/api/mobile/gallery.json?download=true">Download phone library (.json)</a>, send it to the phone (WhatsApp, email, Drive), open it with VoiceFlock. The phone fetches the speaker model from GitHub itself. Re-send the file whenever you flag or name voices.</p>
+        <p><b>Hands-free:</b> set <i>Auto-export phone library to</i> (below) to a folder that syncs to the cloud (Dropbox, Google Drive, OneDrive). The file is rewritten whenever voices or alerts change. Share that file's link once, paste it into the app's Settings → <i>Library URL</i>, and the phone re-downloads it on its own. <span id="export-status" class="muted"></span> <button class="small" id="btn-export-now">Write it now</button></p>
+        <details><summary>Bring edits made on the phone back here</summary>
+          <p class="muted">On the phone: Settings → <i>Share my edits</i>, send the text to yourself, paste it here.</p>
+          <textarea id="phone-edits" rows="3" placeholder='{"format":"voiceflock-phone-settings", ...}' style="width:100%"></textarea>
+          <div class="actions"><button class="small" id="btn-phone-edits">Apply</button> <span id="phone-edits-msg" class="muted"></span></div>
+        </details>
         <pre id="phone-info" class="muted"></pre>
         <div class="actions"><button id="btn-export-model" class="small">Prepare phone model on this laptop</button> <span id="model-status" class="muted"></span></div>
       </details>

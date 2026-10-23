@@ -23,6 +23,38 @@ object Sync {
         return g
     }
 
+    /** Turn a share link into a direct-download link. */
+    fun normaliseLibraryUrl(raw: String): String {
+        var u = raw.trim()
+        if (u.contains("dropbox.com")) { u = u.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace("?dl=0", "").replace("&dl=0", "").replace("?dl=1", "").replace("&dl=1", "") }
+        Regex("drive\\.google\\.com/file/d/([^/]+)").find(u)?.let { u = "https://drive.google.com/uc?export=download&id=${it.groupValues[1]}" }
+        Regex("github\\.com/([^/]+)/([^/]+)/blob/(.+)").find(u)?.let { u = "https://raw.githubusercontent.com/${it.groupValues[1]}/${it.groupValues[2]}/${it.groupValues[3]}" }
+        return u
+    }
+
+    /** Fetch the library JSON from the user's link. Returns null when unchanged (ETag). */
+    suspend fun fetchLibraryUrl(context: Context, prefs: Prefs, force: Boolean = false): Gallery? = withContext(Dispatchers.IO) {
+        val url = normaliseLibraryUrl(prefs.libraryUrl)
+        if (url.isEmpty()) throw SyncError("no library URL set")
+        var cur = URL(url); var c: HttpURLConnection; var hops = 0
+        while (true) {
+            c = cur.openConnection() as HttpURLConnection
+            c.instanceFollowRedirects = false; c.connectTimeout = 15000; c.readTimeout = 60000
+            if (!force && prefs.libraryEtag.isNotEmpty()) c.setRequestProperty("If-None-Match", prefs.libraryEtag)
+            val code = c.responseCode
+            if (code in 300..399 && hops < 6) { cur = URL(cur, c.getHeaderField("Location")); hops++; continue }
+            if (code == 304) return@withContext null
+            if (code != 200) throw SyncError("library link replied HTTP $code")
+            break
+        }
+        val text = c.inputStream.bufferedReader().readText()
+        val g = Gallery.parse(text)
+        Gallery.file(context).writeText(text)
+        prefs.libraryEtag = c.getHeaderField("ETag") ?: ""
+        prefs.lastSync = "link " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())
+        g
+    }
+
     /** Download the model from GitHub (no laptop needed). */
     suspend fun downloadModelFromInternet(context: Context, status: (String) -> Unit): File = withContext(Dispatchers.IO) {
         val model = Gallery.modelFile(context)

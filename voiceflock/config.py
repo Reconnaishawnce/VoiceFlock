@@ -82,6 +82,9 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "help": "Spoken (text-to-speech) when a flagged voice is heard. [NAME] is replaced with the person's name. Per-person messages override this."},
     "alert_default_sound": {"default": "siren", "type": "str", "group": "Alerts",
         "label": "Default alarm sound", "help": "siren | klaxon | chime | none"},
+    "library_export_path": {"default": "", "type": "str", "group": "Alerts",
+        "label": "Auto-export phone library to",
+        "help": "A file or folder, e.g. C:\\Users\\you\\Dropbox\\VoiceFlock. The library JSON is rewritten there whenever voices or alerts change; share that file's link and the phone fetches it on its own."},
     "alert_speak_on_laptop": {"default": True, "type": "bool", "group": "Alerts",
         "label": "Laptop Live mode plays alarm + speaks", "help": "Uses the browser's speech engine; the phone always does."},
     # --- live listening ---

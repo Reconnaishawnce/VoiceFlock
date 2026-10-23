@@ -21,9 +21,14 @@ def _unb64(s: str) -> np.ndarray:
     return np.frombuffer(base64.b64decode(s), dtype=np.float32).copy()
 
 
-def export_gallery(conn: sqlite3.Connection, include_provisional: bool = True) -> dict:
-    persons = db.rows(conn, "SELECT * FROM persons" + ("" if include_provisional else " WHERE kind='named'"))
-    out = {"format": "voiceflock-gallery", "version": 1, "persons": []}
+def export_gallery(conn: sqlite3.Connection, include_provisional: bool = True, person_ids: list[int] | None = None) -> dict:
+    q = "SELECT * FROM persons WHERE 1=1" + ("" if include_provisional else " AND kind='named'")
+    params: tuple = ()
+    if person_ids is not None:
+        q += f" AND id IN ({','.join('?' * len(person_ids)) or 'NULL'})"
+        params = tuple(person_ids)
+    persons = db.rows(conn, q, params)
+    out = {"format": "voiceflock-gallery", "version": 2, "persons": []}
     for p in persons:
         prints = db.rows(conn, "SELECT embedding, is_mean, speech_seconds, quality, origin, source_id, created_at FROM prints"
                                " WHERE person_id=?", (p["id"],))
@@ -31,6 +36,7 @@ def export_gallery(conn: sqlite3.Connection, include_provisional: bool = True) -
                              " WHERE ss.person_id=?", (p["id"],))
         out["persons"].append({
             "name": p["name"], "kind": p["kind"], "notes": p["notes"], "created_at": p["created_at"],
+            "alert": bool(p.get("alert")), "alert_sound": p.get("alert_sound"), "alert_message": p.get("alert_message"),
             "heard_in": [s["name"] for s in srcs],
             "prints": [{"e": _b64(db.blob_to_emb(pr["embedding"])), "is_mean": pr["is_mean"], "speech_seconds": pr["speech_seconds"],
                         "quality": pr["quality"], "origin": pr["origin"], "created_at": pr["created_at"]} for pr in prints],
@@ -43,8 +49,16 @@ def export_gallery(conn: sqlite3.Connection, include_provisional: bool = True) -
 def import_gallery(conn: sqlite3.Connection, data: dict, merge_by_name: bool = True) -> dict:
     if data.get("format") != "voiceflock-gallery":
         raise ValueError("not a VoiceFlock gallery export")
-    stats = {"persons_created": 0, "persons_merged": 0, "prints": 0, "cohort": 0, "calibrations": 0}
+    stats = {"persons_created": 0, "persons_merged": 0, "prints": 0, "cohort": 0, "calibrations": 0, "package": None}
     with db.tx(conn):
+        gid = None
+        pk = data.get("package")
+        if pk and pk.get("name"):
+            r = db.row(conn, "SELECT id FROM groups WHERE name=? COLLATE NOCASE", (pk["name"],))
+            gid = int(r["id"]) if r else int(conn.execute(
+                "INSERT INTO groups(name, description, alert, alert_sound, alert_message) VALUES(?,?,?,?,?)",
+                (pk["name"], pk.get("description"), int(bool(pk.get("alert"))), pk.get("alert_sound"), pk.get("alert_message"))).lastrowid)
+            stats["package"] = pk["name"]
         for p in data.get("persons", []):
             pid = None
             if merge_by_name and p.get("kind") == "named":
@@ -53,9 +67,12 @@ def import_gallery(conn: sqlite3.Connection, data: dict, merge_by_name: bool = T
                     pid = int(r["id"])
                     stats["persons_merged"] += 1
             if pid is None:
-                pid = int(conn.execute("INSERT INTO persons(name, kind, notes) VALUES(?,?,?)",
-                                       (p["name"], p.get("kind", "named"), p.get("notes"))).lastrowid)
+                pid = int(conn.execute("INSERT INTO persons(name, kind, notes, alert, alert_sound, alert_message) VALUES(?,?,?,?,?,?)",
+                                       (p["name"], p.get("kind", "named"), p.get("notes"), int(bool(p.get("alert"))),
+                                        p.get("alert_sound"), p.get("alert_message"))).lastrowid)
                 stats["persons_created"] += 1
+            if gid is not None:
+                conn.execute("INSERT OR IGNORE INTO person_groups(person_id, group_id) VALUES(?, ?)", (pid, gid))
             for pr in p.get("prints", []):
                 conn.execute("INSERT INTO prints(person_id, embedding, is_mean, speech_seconds, quality, origin) VALUES(?,?,?,?,?,?)",
                              (pid, db.emb_to_blob(gallery.l2n(_unb64(pr["e"]))), int(pr.get("is_mean", 0)),

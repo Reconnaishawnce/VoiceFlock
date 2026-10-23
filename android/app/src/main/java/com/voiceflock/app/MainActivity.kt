@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import kotlinx.coroutines.DelicateCoroutinesApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,6 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 
+@OptIn(DelicateCoroutinesApi::class)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,7 +43,17 @@ class MainActivity : ComponentActivity() {
         Alerts.initTts(this)
         if (AppState.gallery.value == null) AppState.gallery.value = Gallery.load(this)
         handleShare(intent)
+        autoFetch()
         setContent { MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF5AD1A8))) { App() } }
+    }
+
+    /** Re-download the library from the user's link when the app opens (cheap: ETag). */
+    private fun autoFetch() {
+        val prefs = Prefs(this)
+        if (!prefs.autoFetch || prefs.libraryUrl.isEmpty()) return
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try { Sync.fetchLibraryUrl(this@MainActivity, prefs)?.let { g -> AppState.gallery.value = g; AppState.pushLog("library updated from link: ${g.people.size} voices") } } catch (_: Exception) {}
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -157,10 +169,26 @@ fun VoicesScreen() {
     var version by remember { mutableIntStateOf(0) }
     var filter by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Person?>(null) }
+    var editingGroup by remember { mutableStateOf<Group?>(null) }
     val g = gallery
     editing?.let { p -> if (g != null) AlertEditor(p, g, prefs, onClose = { editing = null; version++ }) }
+    editingGroup?.let { grp -> if (g != null) GroupEditor(grp, g, prefs, onClose = { editingGroup = null; version++ }) }
     Column(Modifier.padding(16.dp).fillMaxSize()) {
         if (g == null) { Text("Sync first."); return }
+        if (g.groups.isNotEmpty()) key(version) {
+            Text("Packages", style = MaterialTheme.typography.titleSmall)
+            g.groups.forEach { grp ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).clickable { editingGroup = grp }) {
+                        Text("📦 ${grp.name}", fontWeight = FontWeight.Medium)
+                        Text("${grp.n} voices · ${prefs.groupSound(grp) ?: g.defaultSound}${if (prefs.groupMessage(grp) != null) " · custom line" else ""} · tap to edit",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(prefs.groupAlert(grp), { prefs.setGroupAlertOverride(grp.id, it); version++ })
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Alert on every known voice", Modifier.weight(1f))
             Switch(alertAll, { alertAll = it; prefs.alertAllKnown = it })
@@ -172,12 +200,14 @@ fun VoicesScreen() {
             LazyColumn {
                 val list = g.people.filter { it.name.contains(filter, true) }.sortedWith(compareBy({ it.kind != "named" }, { it.name }))
                 items(list, key = { it.id }) { p ->
-                    val on = prefs.alertOverride(p.id) ?: (p.alertDefault || (alertAll && p.kind == "named"))
+                    val on = prefs.isFlagged(p, g)
+                    val pkgs = p.groupIds.mapNotNull { g.groupById[it]?.name }
                     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f).clickable { editing = p }) {
                             Text(p.name, fontWeight = FontWeight.Medium)
-                            Text((if (p.kind == "named") "known" else "unnamed") + " · ${p.prints.size} prints · ${prefs.soundFor(p, g)}" +
-                                (if (prefs.messageOverride(p.id) != null || p.alertMessage != null) " · custom message" else ""),
+                            Text((if (p.kind == "named") "known" else "unnamed") + " · ${prefs.soundFor(p, g)}" +
+                                (if (pkgs.isNotEmpty()) " · " + pkgs.joinToString(", ") else "") +
+                                (if (prefs.messageOverride(p.id) != null || p.alertMessage != null) " · own line" else ""),
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(on, { prefs.setAlertOverride(p.id, it); version++ })
@@ -193,7 +223,7 @@ fun AlertEditor(p: Person, g: Gallery, prefs: Prefs, onClose: () -> Unit) {
     val ctx = LocalContext.current
     var msg by remember { mutableStateOf(prefs.messageOverride(p.id) ?: p.alertMessage ?: "") }
     var snd by remember { mutableStateOf(prefs.soundOverride(p.id) ?: p.alertSound ?: "") }
-    val sounds = listOf("" to "library default (${g.defaultSound})", "siren" to "siren", "klaxon" to "klaxon", "chime" to "chime", "none" to "no sound")
+    val sounds = listOf("" to "inherit (${p.groupIds.firstNotNullOfOrNull { gid -> g.groupById[gid]?.let { prefs.groupSound(it) } } ?: g.defaultSound})") + Gallery.SOUNDS
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text(p.name) },
@@ -210,6 +240,31 @@ fun AlertEditor(p: Person, g: Gallery, prefs: Prefs, onClose: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = { prefs.setMessageOverride(p.id, msg); prefs.setSoundOverride(p.id, snd); onClose() }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
+}
+
+@Composable
+fun GroupEditor(grp: Group, g: Gallery, prefs: Prefs, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    var msg by remember { mutableStateOf(prefs.groupMessage(grp) ?: "") }
+    var snd by remember { mutableStateOf(prefs.groupSound(grp) ?: "") }
+    var on by remember { mutableStateOf(prefs.groupAlert(grp)) }
+    val sounds = listOf("" to "library default (${g.defaultSound})") + Gallery.SOUNDS
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("📦 ${grp.name} · ${grp.n} voices") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Alert on everyone in this package", Modifier.weight(1f)); Switch(on, { on = it }) }
+                Text("Alarm sound", style = MaterialTheme.typography.labelMedium)
+                sounds.forEach { (v, label) -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { snd = v }) { RadioButton(snd == v, { snd = v }); Text(label) } }
+                OutlinedTextField(msg, { msg = it }, label = { Text("Spoken line for the package ([NAME] = the person); empty = default") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                Text("A person's own sound/line (tap their name) overrides the package.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = { Alerts.performAlert(ctx, "Nancy Pelosi", snd.ifBlank { g.defaultSound }, Gallery.render(msg.ifBlank { prefs.defaultMessage.ifBlank { g.defaultMessage } }, "Nancy Pelosi"), prefs.demoMode) }) { Text("▶ Test now") }
+            }
+        },
+        confirmButton = { TextButton(onClick = { prefs.setGroupAlertOverride(grp.id, on); prefs.setGroupSoundOverride(grp.id, snd); prefs.setGroupMessageOverride(grp.id, msg); onClose() }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
     )
 }
@@ -249,6 +304,39 @@ fun SettingsScreen() {
             }, modifier = Modifier.weight(1f)) { Text("Download model") }
         }
         Text(modelStatus, style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
+        Text("Hands-free: library link", style = MaterialTheme.typography.titleSmall)
+        Text("On the laptop set \"Auto-export phone library to\" to a Dropbox/Drive/OneDrive folder, share the file's link, paste it here. The phone re-downloads it when opened (and before each listening session).",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        var libUrl by remember { mutableStateOf(prefs.libraryUrl) }
+        var autoFetch by remember { mutableStateOf(prefs.autoFetch) }
+        OutlinedTextField(libUrl, { libUrl = it }, label = { Text("Library link (Dropbox, Google Drive, GitHub, any https)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(enabled = !busy && libUrl.isNotBlank(), onClick = {
+                prefs.libraryUrl = libUrl; busy = true
+                scope.launch {
+                    try { val g = Sync.fetchLibraryUrl(ctx, prefs, force = true); if (g != null) { AppState.gallery.value = g; status = "fetched ${g.people.size} voices, ${g.groups.size} packages" } else status = "unchanged" }
+                    catch (e: Exception) { status = "fetch failed: ${e.message}" }
+                    busy = false
+                }
+            }) { Text("Fetch now") }
+            Spacer(Modifier.width(12.dp)); Text("Auto", Modifier.weight(1f)); Switch(autoFetch, { autoFetch = it; prefs.autoFetch = it })
+        }
+        HorizontalDivider()
+        Text("Send edits back to the laptop", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "VoiceFlock phone edits").putExtra(Intent.EXTRA_TEXT, prefs.exportEdits(gallery))
+                ctx.startActivity(Intent.createChooser(send, "Share my edits"))
+            }, modifier = Modifier.weight(1f)) { Text("Share my edits") }
+            OutlinedButton(enabled = gallery != null, onClick = {
+                val f = Gallery.file(ctx)
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "VoiceFlock library").putExtra(Intent.EXTRA_TEXT, f.readText())
+                ctx.startActivity(Intent.createChooser(send, "Share library"))
+            }, modifier = Modifier.weight(1f)) { Text("Share library") }
+        }
+        Text("Flags, sounds and lines you changed here, as text. Paste it into the laptop's Settings → \"Bring edits made on the phone back here\".",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("Or sync from the laptop directly (same Wi-Fi or Tailscale)", style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(url, { url = it }, label = { Text("VoiceFlock address, e.g. http://192.168.1.20:8787 or your Tailscale name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)

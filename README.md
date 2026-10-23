@@ -249,8 +249,19 @@ network, and audio is never stored or sent anywhere.
    screen off. The Voices tab lets you flag/unflag on the phone (overrides the laptop's flags) or alert on
    every known voice. Re-sync whenever the library changes.
 
-**Custom alerts (the bit).** Each flagged person can have their own alarm sound (synthesised siren, klaxon
-or chime) and a spoken line, set on the laptop's person page (with a Test button) or on the phone by
+**Packages.** People → Packages groups voices under one alert setting ("Politicians": alert on, vault sound,
+one spoken line for all 500), downloadable as a single file and importable on another VoiceFlock. A person's
+own settings override their package's. The phone shows packages at the top of Voices with the same bulk
+switch and editor.
+
+**Getting the library to the phone without touching the firewall.** Settings → *Auto-export phone library
+to* a folder that syncs to the cloud (Dropbox, Google Drive, OneDrive). The file is rewritten whenever voices,
+packages or alerts change. Share that file's link once and paste it into the app's Settings → *Library link*;
+the phone re-downloads it whenever it is opened. Edits made on the phone (flags, sounds, lines) go back with
+Settings → *Share my edits* (sends text) → paste into the laptop's Settings.
+
+**Custom alerts (the bit).** Each flagged person or package can have its own alarm sound (synthesised: siren,
+two-tone horn, blast-door vault, phone-style radar, klaxon, chime) and a spoken line, set on the laptop's person page (with a Test button) or on the phone by
 tapping the name in Voices. `[NAME]` is replaced with the person's name; the default template lives in
 Settings → Alerts. On the phone, **Demo mode** plays the alarm and the text-to-speech line through the
 alarm channel at full volume even when the phone is silent; the laptop's Live tab does the same with the

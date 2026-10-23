@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, audio, config, db, feeds, gallery, live, onnx_export, transfer, worker, youtube
+from . import __version__, audio, config, db, feeds, gallery, live, mobile, onnx_export, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -42,11 +42,25 @@ class PersonPatch(BaseModel):
     alert_message: str | None = None    # "" = default template
 
 
-ALERT_SOUNDS = ("siren", "klaxon", "chime", "none")
+ALERT_SOUNDS = mobile.ALERT_SOUNDS
+render_alert_message = mobile.render_alert_message
 
 
-def render_alert_message(template: str, name: str) -> str:
-    return (template or "").replace("[NAME]", name).replace("{name}", name).strip()
+class GroupIn(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class GroupPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    alert: bool | None = None
+    alert_sound: str | None = None
+    alert_message: str | None = None
+
+
+class MembersIn(BaseModel):
+    person_ids: list[int]
 
 
 class YtListIn(BaseModel):
@@ -247,7 +261,11 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                                            (p["id"],)).fetchone()[0]
         p["heard_in"] = person_sources(conn, p["id"], limit=50)
         p["glyph"] = person_glyph(conn, p["id"])
-        p["spoken"] = render_alert_message(p.get("alert_message") or config.Settings(conn)["alert_default_message"], p["name"])
+        p["groups"] = db.rows(conn, "SELECT g.id, g.name, g.alert FROM person_groups pg JOIN groups g ON g.id=pg.group_id WHERE pg.person_id=? ORDER BY g.name", (p["id"],))
+        p["effective"] = mobile.effective_alert(p, p["groups"] and db.rows(conn,
+            "SELECT g.* FROM person_groups pg JOIN groups g ON g.id=pg.group_id WHERE pg.person_id=? ORDER BY g.id", (p["id"],)) or [],
+            config.Settings(conn))
+        p["spoken"] = p["effective"]["spoken"]
         return p
 
     def person_mean(conn, person_id: int):
@@ -386,6 +404,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 except (ValueError, TypeError) as e:
                     raise HTTPException(400, f"bad value for {k}: {e}")
         db.bump_prints_version(conn)  # scoring settings affect the gallery snapshot
+        mobile.mark_dirty(conn)
         return {"values": s.all()}
 
     # ---------------------------------------------------------------- uploads
@@ -694,6 +713,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             if body.alert_message is not None:
                 conn.execute("UPDATE persons SET alert_message=? WHERE id=?", (body.alert_message.strip() or None, pid))
             db.bump_prints_version(conn)
+            mobile.mark_dirty(conn)
         return person_out(conn, db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,)))
 
     def merge_persons(conn, from_id: int, into_id: int) -> None:
@@ -730,8 +750,114 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             conn.execute("UPDATE source_speakers SET assignment='named' WHERE person_id=? AND assignment='auto'", (pid,))
             conn.execute("UPDATE matches SET status='confirmed' WHERE person_id=? AND status='auto'", (pid,))
             db.bump_prints_version(conn)
+            mobile.mark_dirty(conn)
             queue_rematch(conn)
         return person_out(conn, db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,)))
+
+    # ---------------------------------------------------------------- packages (groups)
+    def group_out(conn, g: dict) -> dict:
+        g = dict(g)
+        g["n"] = conn.execute("SELECT COUNT(*) FROM person_groups WHERE group_id=?", (g["id"],)).fetchone()[0]
+        settings = config.Settings(conn)
+        g["spoken_example"] = render_alert_message(g["alert_message"] or settings["alert_default_message"], "Nancy Pelosi")
+        return g
+
+    @app.get("/api/groups")
+    def list_groups(conn=Depends(get_conn)):
+        return {"groups": [group_out(conn, g) for g in db.rows(conn, "SELECT * FROM groups ORDER BY name")], "sounds": list(ALERT_SOUNDS)}
+
+    @app.post("/api/groups")
+    def create_group(body: GroupIn, conn=Depends(get_conn)):
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "name required")
+        with db.tx(conn):
+            r = db.row(conn, "SELECT id FROM groups WHERE name=? COLLATE NOCASE", (name,))
+            gid = int(r["id"]) if r else int(conn.execute("INSERT INTO groups(name, description) VALUES(?, ?)", (name, body.description)).lastrowid)
+        return group_out(conn, db.row(conn, "SELECT * FROM groups WHERE id=?", (gid,)))
+
+    @app.get("/api/groups/{gid}")
+    def get_group(gid: int, conn=Depends(get_conn)):
+        g = db.row(conn, "SELECT * FROM groups WHERE id=?", (gid,))
+        if not g:
+            raise HTTPException(404)
+        g = group_out(conn, g)
+        g["members"] = [person_out(conn, p) for p in db.rows(conn,
+            "SELECT p.* FROM person_groups pg JOIN persons p ON p.id=pg.person_id WHERE pg.group_id=? ORDER BY p.name COLLATE NOCASE", (gid,))]
+        return g
+
+    @app.patch("/api/groups/{gid}")
+    def patch_group(gid: int, body: GroupPatch, conn=Depends(get_conn)):
+        if not db.row(conn, "SELECT id FROM groups WHERE id=?", (gid,)):
+            raise HTTPException(404)
+        with db.tx(conn):
+            if body.name is not None and body.name.strip():
+                conn.execute("UPDATE groups SET name=? WHERE id=?", (body.name.strip(), gid))
+            if body.description is not None:
+                conn.execute("UPDATE groups SET description=? WHERE id=?", (body.description.strip() or None, gid))
+            if body.alert is not None:
+                conn.execute("UPDATE groups SET alert=? WHERE id=?", (int(body.alert), gid))
+            if body.alert_sound is not None:
+                snd = body.alert_sound.strip().lower()
+                if snd and snd not in ALERT_SOUNDS:
+                    raise HTTPException(400, f"alert_sound must be one of {ALERT_SOUNDS}")
+                conn.execute("UPDATE groups SET alert_sound=? WHERE id=?", (snd or None, gid))
+            if body.alert_message is not None:
+                conn.execute("UPDATE groups SET alert_message=? WHERE id=?", (body.alert_message.strip() or None, gid))
+            db.bump_prints_version(conn)
+            mobile.mark_dirty(conn)
+        return group_out(conn, db.row(conn, "SELECT * FROM groups WHERE id=?", (gid,)))
+
+    @app.delete("/api/groups/{gid}")
+    def delete_group(gid: int, conn=Depends(get_conn)):
+        with db.tx(conn):
+            n = conn.execute("DELETE FROM groups WHERE id=?", (gid,)).rowcount
+            db.bump_prints_version(conn)
+            mobile.mark_dirty(conn)
+        if not n:
+            raise HTTPException(404)
+        return {"deleted": gid}
+
+    @app.post("/api/groups/{gid}/members")
+    def add_members(gid: int, body: MembersIn, conn=Depends(get_conn)):
+        if not db.row(conn, "SELECT id FROM groups WHERE id=?", (gid,)):
+            raise HTTPException(404)
+        with db.tx(conn):
+            for pid in body.person_ids:
+                if db.row(conn, "SELECT 1 AS x FROM persons WHERE id=?", (pid,)):
+                    conn.execute("INSERT OR IGNORE INTO person_groups(person_id, group_id) VALUES(?, ?)", (pid, gid))
+            db.bump_prints_version(conn)
+            mobile.mark_dirty(conn)
+        return group_out(conn, db.row(conn, "SELECT * FROM groups WHERE id=?", (gid,)))
+
+    @app.delete("/api/groups/{gid}/members/{pid}")
+    def remove_member(gid: int, pid: int, conn=Depends(get_conn)):
+        with db.tx(conn):
+            conn.execute("DELETE FROM person_groups WHERE group_id=? AND person_id=?", (gid, pid))
+            db.bump_prints_version(conn)
+            mobile.mark_dirty(conn)
+        return group_out(conn, db.row(conn, "SELECT * FROM groups WHERE id=?", (gid,)))
+
+    @app.get("/api/groups/{gid}/export")
+    def export_group(gid: int, conn=Depends(get_conn)):
+        """A shareable package: the members' prints plus the package's alert settings."""
+        g = db.row(conn, "SELECT * FROM groups WHERE id=?", (gid,))
+        if not g:
+            raise HTTPException(404)
+        ids = [r["person_id"] for r in conn.execute("SELECT person_id FROM person_groups WHERE group_id=?", (gid,))]
+        data = transfer.export_gallery(conn, include_provisional=True, person_ids=ids)
+        data["package"] = {"name": g["name"], "description": g["description"], "alert": bool(g["alert"]),
+                           "alert_sound": g["alert_sound"], "alert_message": g["alert_message"]}
+        safe = re.sub(r"[^\w.-]+", "_", g["name"]).strip("_") or "package"
+        return Response(transfer.dumps(data), media_type="application/json",
+                        headers={"Content-Disposition": f"attachment; filename=voiceflock-package-{safe}.json"})
+
+    @app.post("/api/import/phone_settings")
+    def import_phone_settings(body: dict[str, Any], conn=Depends(get_conn)):
+        try:
+            return mobile.apply_phone_settings(conn, body)
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(400, str(e))
 
     @app.delete("/api/persons/{pid}")
     def delete_person(pid: int, conn=Depends(get_conn)):
@@ -942,6 +1068,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         try:
             data = json.loads(await file.read())
             stats = transfer.import_gallery(conn, data)
+            mobile.mark_dirty(conn)
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(400, f"bad gallery file: {e}")
         with db.tx(conn):
@@ -969,32 +1096,28 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
     # ---------------------------------------------------------------- phone sync
     @app.get("/api/mobile/gallery.json")
     def mobile_gallery(max_prints: int = 4, download: bool = False, conn=Depends(get_conn)):
-        """Compact gallery for the phone: per person the mean print plus a few chunk prints, alert flags,
-        raw-cosine calibration and the match threshold."""
-        import base64
-        settings = config.Settings(conn)
-        cal = gallery.load_calibrations(conn, settings)["raw"]
-        people = []
-        for p in db.rows(conn, "SELECT id, name, kind, alert, alert_sound, alert_message FROM persons"):
-            rows = conn.execute("SELECT embedding FROM prints WHERE person_id=? ORDER BY is_mean DESC, COALESCE(quality,0) DESC LIMIT ?",
-                                (p["id"], max_prints)).fetchall()
-            if not rows:
-                continue
-            prints = [base64.b64encode(db.emb_to_blob(gallery.l2n(db.blob_to_emb(r["embedding"])))).decode() for r in rows]
-            people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]),
-                           "alert_sound": p["alert_sound"], "alert_message": p["alert_message"],
-                           "spoken": render_alert_message(p["alert_message"] or settings["alert_default_message"], p["name"]),
-                           "prints": prints})
-        data = {"format": "voiceflock-mobile", "version": 1, "generated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
-                "dim": config.EMBED_DIM, "sample_rate": 16000, "match_threshold": float(settings["match_threshold"]),
-                "calibration": {"a": cal.a, "b": cal.b}, "window_s": float(settings["live_window_s"]), "hop_s": float(settings["live_hop_s"]),
-                "min_level_db": float(settings["live_min_level_db"]), "model": onnx_export.MODEL_FILE, "model_meta": onnx_export.meta(),
-                "alert_defaults": {"message": settings["alert_default_message"], "sound": settings["alert_default_sound"]},
-                "people": people}
+        """Compact library for the phone: people with a few prints each, packages, alert settings, calibration."""
+        data = mobile.build(conn, max_prints)
         if download:
             return Response(json.dumps(data), media_type="application/json",
                             headers={"Content-Disposition": f"attachment; filename=voiceflock-library-{__import__('time').strftime('%Y%m%d')}.json"})
         return data
+
+    @app.get("/api/mobile/export_status")
+    def mobile_export_status(conn=Depends(get_conn)):
+        return {"path": config.Settings(conn)["library_export_path"],
+                "dirty": (db.row(conn, "SELECT value FROM meta WHERE key='library_dirty'") or {}).get("value") == "1",
+                "exported_at": (db.row(conn, "SELECT value FROM meta WHERE key='library_exported_at'") or {}).get("value")}
+
+    @app.post("/api/mobile/export_now")
+    def mobile_export_now(conn=Depends(get_conn)):
+        try:
+            out = mobile.export_if_dirty(conn, force=True)
+        except OSError as e:
+            raise HTTPException(400, f"could not write: {e}")
+        if not out:
+            raise HTTPException(400, "set 'Auto-export phone library to' in Settings first")
+        return {"written": str(out)}
 
     @app.api_route("/api/mobile/model.onnx", methods=["GET", "HEAD"])
     def mobile_model(conn=Depends(get_conn)):

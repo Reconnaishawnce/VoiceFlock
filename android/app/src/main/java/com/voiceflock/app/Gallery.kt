@@ -10,9 +10,12 @@ import kotlin.math.exp
 
 data class Person(
     val id: Int, val name: String, val kind: String, val alertDefault: Boolean, val prints: List<FloatArray>,
-    val alertSound: String? = null,      // siren | klaxon | chime | none | null = library default
-    val alertMessage: String? = null,    // template with [NAME]; null = library default
+    val alertSound: String? = null,      // siren | horn | vault | radar | klaxon | chime | none | null = inherit
+    val alertMessage: String? = null,    // template with [NAME]; null = inherit
+    val groupIds: List<Int> = emptyList(),
 )
+
+data class Group(val id: Int, val name: String, val description: String?, val alert: Boolean, val alertSound: String?, val alertMessage: String?, val n: Int)
 
 data class Match(val person: Person, val cosine: Float, val probability: Float)
 
@@ -29,7 +32,9 @@ class Gallery(
     val dim: Int,
     val defaultMessage: String = DEFAULT_MESSAGE,
     val defaultSound: String = "siren",
+    val groups: List<Group> = emptyList(),
 ) {
+    val groupById: Map<Int, Group> = groups.associateBy { it.id }
     private val owners: IntArray
     private val matrix: Array<FloatArray>
 
@@ -64,6 +69,7 @@ class Gallery(
 
     companion object {
         const val DEFAULT_MESSAGE = "Attention. [NAME], your voice was detected nearby. It's time to regulate mass surveillance."
+        val SOUNDS = listOf("siren" to "siren (civil-defence wail)", "horn" to "horn (emergency two-tone)", "vault" to "vault (blast door)", "radar" to "radar (phone alarm)", "klaxon" to "klaxon", "chime" to "chime", "none" to "no sound")
         fun render(template: String, name: String) = template.replace("[NAME]", name).replace("{name}", name).trim()
 
         fun file(context: Context): File = File(context.filesDir, "gallery.json")
@@ -90,11 +96,17 @@ class Gallery(
                     val e = decode(pr.getString(k))
                     if (e.size == dim) prints.add(normalise(e))
                 }
+                val gids = ArrayList<Int>()
+                p.optJSONArray("group_ids")?.let { a -> for (k in 0 until a.length()) gids.add(a.getInt(k)) }
                 if (prints.isNotEmpty())
                     people.add(Person(p.getInt("id"), p.getString("name"), p.optString("kind", "named"), p.optBoolean("alert", false), prints,
                         p.optString("alert_sound", "").ifEmpty { null }.takeIf { it != "null" },
-                        p.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" }))
+                        p.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" }, gids))
             }
+            val groups = ArrayList<Group>()
+            j.optJSONArray("groups")?.let { a -> for (k in 0 until a.length()) { val g = a.getJSONObject(k)
+                groups.add(Group(g.getInt("id"), g.getString("name"), g.optString("description", "").ifEmpty { null }.takeIf { it != "null" }, g.optBoolean("alert", false),
+                    g.optString("alert_sound", "").ifEmpty { null }.takeIf { it != "null" }, g.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" }, g.optInt("n", 0))) } }
             val defaults = j.optJSONObject("alert_defaults")
             return Gallery(
                 people, cal.getDouble("a"), cal.getDouble("b"), j.optDouble("match_threshold", 0.75).toFloat(),
@@ -102,6 +114,7 @@ class Gallery(
                 j.optDouble("min_level_db", -45.0).toFloat(), j.optString("generated_at", ""), dim,
                 defaults?.optString("message", DEFAULT_MESSAGE)?.ifEmpty { DEFAULT_MESSAGE } ?: DEFAULT_MESSAGE,
                 defaults?.optString("sound", "siren")?.ifEmpty { "siren" } ?: "siren",
+                groups,
             )
         }
 

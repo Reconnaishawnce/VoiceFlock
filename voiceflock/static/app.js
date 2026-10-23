@@ -28,7 +28,7 @@ function render() {
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === STATE.tab));
   $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== "tab-" + STATE.tab));
   if (STATE.tab === "library") { STATE.sourceId = id ? Number(id) : null; loadLibrary(); }
-  else if (STATE.tab === "people") { STATE.personId = id ? Number(id) : null; loadPeople(); }
+  else if (STATE.tab === "people") { STATE.personKind = id && id.startsWith("pkg") ? "pkg" : "person"; STATE.personId = id ? Number(id.replace("pkg", "")) : null; loadPeople(); }
   else if (STATE.tab === "home") loadHome();
   else if (STATE.tab === "settings") loadSettings();
 }
@@ -397,7 +397,44 @@ async function loadNames() {
   $("#person-names").innerHTML = j.persons.map((p) => `<option value="${esc(p.name)}">`).join("");
   return j.persons;
 }
+async function createGroup() { const name = $("#newpkg").value.trim(); if (!name) return; try { const g = await api("/api/groups", { method: "POST", body: { name } }); go(`people/pkg${g.id}`); } catch (e) { onErr(e); } }
+async function patchGroup(gid, body) { try { await api(`/api/groups/${gid}`, { method: "PATCH", body }); toast("Package updated"); } catch (e) { onErr(e); render(); } }
+async function importPackage(ev) {
+  const f = ev.target.files[0]; if (!f) return; const fd = new FormData(); fd.append("file", f);
+  try { const r = await fetch("/api/import/gallery", { method: "POST", body: fd }); const j = await r.json(); if (!r.ok) throw new Error(j.detail); toast(`Imported ${j.persons_created} new, ${j.persons_merged} merged${j.package ? " into package " + j.package : ""}`); render(); loadStats(); } catch (e) { onErr(e); }
+}
+async function loadGroupDetail(gid) {
+  try {
+    const g = await api(`/api/groups/${gid}`); const named = await loadNames();
+    const el = $("#people-detail");
+    el.innerHTML = `<button class="back" onclick="go('people')">← People</button>
+      <div class="card">
+        <div class="profile"><div><h2>📦 ${esc(g.name)} <span class="muted" style="font-size:14px">${g.n} voices</span></h2><div class="meta">${g.description ? esc(g.description) + " · " : ""}<a class="link" href="/api/groups/${g.id}/export">download package file</a> · <a class="link" onclick="renameGroup(${g.id})">rename</a> · <a class="link" onclick="deleteGroup(${g.id})">delete package</a></div></div></div>
+        <h3>Alert for everyone in this package</h3>
+        <label class="chk"><input type="checkbox" ${g.alert ? "checked" : ""} onchange="patchGroup(${g.id}, {alert: this.checked})"> Alert when any of these voices is heard (Live + phone)</label>
+        <div class="inline" style="flex-wrap:wrap;align-items:flex-start">
+          <select id="gs-${g.id}" style="flex:0 0 220px">${soundOptions(g.alert_sound, `default (${esc(SETTINGS.alert_default_sound || "siren")})`)}</select>
+          <textarea id="gm-${g.id}" rows="2" style="flex:1 1 320px" placeholder="${esc(SETTINGS.alert_default_message || "")}">${esc(g.alert_message || "")}</textarea>
+          <button class="small primary" onclick="patchGroup(${g.id}, {alert_sound: $('#gs-${g.id}').value, alert_message: $('#gm-${g.id}').value})">Save</button>
+          <button class="small" onclick="runAlert('Nancy Pelosi', $('#gs-${g.id}').value || null, $('#gm-${g.id}').value || null)">▶ Test</button></div>
+        <div class="sub">A person's own sound or line (set on their profile) overrides the package's. <code>[NAME]</code> is replaced per person.</div>
+        <h3>Members</h3>
+        <div class="inline" style="max-width:560px"><input id="addm-${g.id}" placeholder="Add a known person by name…" list="person-names"><button class="small" onclick="addMemberByName(${g.id})">Add</button><button class="small" onclick="addAllKnown(${g.id})" title="Add every known person">Add all known (${named.length})</button></div>
+        ${g.members.map((m) => `<div class="appear"><div>${glyphSvg(m.glyph, "var(--s1)", 24)} <a class="link" onclick="openPerson(${m.id})"><b>${esc(m.name)}</b></a> <span class="muted">· ${m.n_sources} rec · ${fmtT(m.speech_seconds)}${m.alert_sound || m.alert_message ? " · has own alert settings" : ""}</span></div>
+          <div class="actions"><button class="small" onclick="removeFromGroup(${g.id}, ${m.id})">Remove</button></div></div>`).join("") || '<p class="muted">No members yet.</p>'}
+      </div>`;
+  } catch (e) { onErr(e); }
+}
+async function addMemberByName(gid) {
+  const name = $(`#addm-${gid}`).value.trim(); if (!name) return;
+  try { const named = await loadNames(); const p = named.find((x) => x.name.toLowerCase() === name.toLowerCase()); if (!p) throw new Error("no known person with that name");
+    await api(`/api/groups/${gid}/members`, { method: "POST", body: { person_ids: [p.id] } }); render(); } catch (e) { onErr(e); }
+}
+async function addAllKnown(gid) { if (!confirm("Add every known person to this package?")) return; try { const named = await loadNames(); await api(`/api/groups/${gid}/members`, { method: "POST", body: { person_ids: named.map((p) => p.id) } }); render(); } catch (e) { onErr(e); } }
+async function renameGroup(gid) { const name = prompt("New package name?"); if (!name) return; try { await api(`/api/groups/${gid}`, { method: "PATCH", body: { name } }); render(); } catch (e) { onErr(e); } }
+async function deleteGroup(gid) { if (!confirm("Delete this package? The people stay; only the grouping and its alert setting go.")) return; try { await api(`/api/groups/${gid}`, { method: "DELETE" }); go("people"); } catch (e) { onErr(e); } }
 async function loadPeople() {
+  if (STATE.personId && STATE.personKind === "pkg") { $("#people-list").classList.add("hidden"); $("#people-detail").classList.remove("hidden"); return loadGroupDetail(STATE.personId); }
   if (STATE.personId) { $("#people-list").classList.add("hidden"); $("#people-detail").classList.remove("hidden"); return loadPersonDetail(STATE.personId); }
   $("#people-detail").classList.add("hidden"); $("#people-list").classList.remove("hidden");
   $$("#people-seg button").forEach((b) => b.classList.toggle("active", b.dataset.view === STATE.peopleView));
@@ -417,9 +454,20 @@ async function loadPeople() {
         ${v.heard_in.slice(0, 2).map((h) => `<div class="sub"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}</div>${clip(h.clip_url)}`).join("")}
         <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
         <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || `<p class="muted">No unnamed voices yet.</p>`;
+    } else if (STATE.peopleView === "packages") {
+      const j = await api("/api/groups"); ALLGROUPS = j.groups;
+      $$("#people-seg button")[2].textContent = `Packages (${j.groups.length})`;
+      el.innerHTML = `<p class="muted">A package is a set of voices with one alert setting: flag 500 politicians at once, give them all the same alarm and line, download or share them as one file.</p>
+        <div class="inline" style="max-width:520px"><input id="newpkg" placeholder="New package name, e.g. Politicians"><button class="small primary" onclick="createGroup()">Create</button><label class="link" style="align-self:center;white-space:nowrap">import package<input type="file" id="import-pkg" accept="application/json" hidden></label></div>
+        ${j.groups.map((g) => `<div class="item" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div style="flex:1"><a class="link" onclick="go('people/pkg${g.id}')"><b>${esc(g.name)}</b></a> <span class="muted">· ${g.n} voices${g.description ? " · " + esc(g.description) : ""}</span>
+            <div class="muted" style="font-size:12px">${g.alert ? `🔔 alerting · ${esc(g.alert_sound || SETTINGS.alert_default_sound || "siren")} · “${esc(g.spoken_example)}”` : "not alerting"}</div></div>
+          <label class="chk" style="margin:0"><input type="checkbox" ${g.alert ? "checked" : ""} onchange="patchGroup(${g.id}, {alert: this.checked})"> alert</label>
+          <button class="small" onclick="go('people/pkg${g.id}')">Open</button><a class="link" href="/api/groups/${g.id}/export">download</a></div>`).join("") || '<p class="muted">No packages yet.</p>'}`;
+      $("#import-pkg").addEventListener("change", importPackage);
     } else {
       const j = await api("/api/voices/merge_suggestions");
-      $$("#people-seg button")[2].textContent = `Possible duplicates (${j.pairs.length})`;
+      $$("#people-seg button")[3].textContent = `Possible duplicates (${j.pairs.length})`;
       el.innerHTML = j.pairs.length ? `<p class="muted">Different mics or rooms can split one person into several entries. Listen to both, then merge.</p>` + j.pairs.map((p) => `<div class="item"><div class="title"><a class="link" onclick="openPerson(${p.a.id})">${esc(p.a.name)}</a><span class="pill ${p.a.kind}">${p.a.kind === "named" ? "known" : "unnamed"}</span> ≈ <a class="link" onclick="openPerson(${p.b.id})">${esc(p.b.name)}</a><span class="pill ${p.b.kind}">${p.b.kind === "named" ? "known" : "unnamed"}</span> <span class="prob hi">${pct(p.probability)}</span></div>
         <div class="row" style="margin:4px 0 0">${[p.a, p.b].map((x) => `<div class="col">${clip(x.heard_in[0]?.clip_url) || '<span class="muted">no clip</span>'}</div>`).join("")}</div>
         <div class="actions"><button class="small primary" onclick="mergeInto(${p.a.kind === "named" ? p.b.id : p.a.id}, ${p.a.kind === "named" ? p.a.id : p.b.id})">Merge into ${esc(p.a.kind === "named" ? p.a.name : p.b.name)}</button>${p.a.kind !== "named" && p.b.kind !== "named" ? ` <button class="small" onclick="mergeInto(${p.b.id}, ${p.a.id})">Merge into ${esc(p.a.name)}</button>` : ""}</div></div>`).join("") : `<p class="muted">No likely duplicates right now.</p>`;
@@ -434,12 +482,21 @@ async function mergePerson(id) { const into = $(`#mg-${id}`).value; if (!into) r
 async function mergeInto(fromId, intoId) { if (!confirm("Merge? Prints and recordings move over; the other entry is deleted.")) return; try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); render(); loadStats(); } catch (e) { onErr(e); } }
 async function deletePerson(id) { if (!confirm("Delete this voice and all its prints?")) return; try { await api(`/api/persons/${id}`, { method: "DELETE" }); toast("Deleted"); go("people"); loadStats(); } catch (e) { onErr(e); } }
 async function acceptPerson(id) { try { const p = await api(`/api/persons/${id}/accept`, { method: "POST" }); toast(`Kept as ${p.name}`); render(); loadStats(); } catch (e) { onErr(e); } }
+async function addToGroup(pid) {
+  let gid = $(`#addg-${pid}`).value; if (!gid) return;
+  try {
+    if (gid === "__new") { const name = prompt("Package name (e.g. Politicians)?"); if (!name) return; gid = (await api("/api/groups", { method: "POST", body: { name } })).id; }
+    await api(`/api/groups/${gid}/members`, { method: "POST", body: { person_ids: [pid] } }); toast("Added"); render();
+  } catch (e) { onErr(e); }
+}
+async function removeFromGroup(gid, pid) { try { await api(`/api/groups/${gid}/members/${pid}`, { method: "DELETE" }); render(); } catch (e) { onErr(e); } }
 async function renamePerson(id) { const name = prompt("New name?"); if (!name) return; try { await api(`/api/persons/${id}`, { method: "PATCH", body: { name } }); render(); } catch (e) { onErr(e); } }
 
 /* --- person profile --- */
+let ALLGROUPS = [];
 async function loadPersonDetail(id) {
   try {
-    const p = await api(`/api/persons/${id}`);
+    const [p, gj] = await Promise.all([api(`/api/persons/${id}`), api("/api/groups")]); ALLGROUPS = gj.groups;
     const el = $("#people-detail");
     el.innerHTML = `<button class="back" onclick="go('people')">← People</button>
       <div class="card">
@@ -448,9 +505,12 @@ async function loadPersonDetail(id) {
           <div class="meta">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints${p.notes ? " · " + esc(p.notes) : ""}</div></div>
           <div class="actions" style="margin-left:auto">${p.kind === "provisional" ? `<input id="pn-${p.id}" placeholder="Name this voice" list="person-names" style="max-width:200px"><button class="small primary" onclick="namePerson(${p.id})">Name</button><button class="small" onclick="acceptPerson(${p.id})">Keep</button>` : `<button class="small" onclick="renamePerson(${p.id})">Rename</button>`}<button class="small danger" onclick="deletePerson(${p.id})">Delete</button></div>
         </div>
-        <details ${p.alert ? "open" : ""}><summary>Alert: alarm + spoken line ${p.alert ? "(on)" : "(off, click the bell to turn on)"}</summary>
+        <div class="sub" style="margin:6px 0">Packages: ${(p.groups || []).map((g) => `<span class="pill ${g.alert ? "named" : ""}" title="${g.alert ? "this package alerts" : ""}">${esc(g.name)} <a class="link" onclick="removeFromGroup(${g.id}, ${p.id})" title="remove">✕</a></span>`).join(" ") || '<span class="muted">none</span>'}
+          <select id="addg-${p.id}" style="max-width:200px;display:inline-block;width:auto"><option value="">+ add to package…</option>${(ALLGROUPS || []).filter((g) => !(p.groups || []).some((x) => x.id === g.id)).map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}<option value="__new">+ new package…</option></select>
+          <button class="small" onclick="addToGroup(${p.id})">Add</button></div>
+        <details ${p.effective?.alert ? "open" : ""}><summary>Alert: alarm + spoken line ${p.effective?.alert ? `(on${p.effective.via && p.effective.via !== "person" ? ", via " + esc(p.effective.via.replace("package:", "package ")) : ""})` : "(off, click the bell or add to an alerting package)"}</summary>
           <div class="inline" style="flex-wrap:wrap;align-items:flex-start;margin-top:8px">
-            <select id="as-${p.id}" style="flex:0 0 170px"><option value="" ${!p.alert_sound ? "selected" : ""}>default alarm (${esc(SETTINGS.alert_default_sound || "siren")})</option>${["siren", "klaxon", "chime", "none"].map((k) => `<option value="${k}" ${p.alert_sound === k ? "selected" : ""}>${k}</option>`).join("")}</select>
+            <select id="as-${p.id}" style="flex:0 0 220px">${soundOptions(p.alert_sound, `inherit (${esc(p.effective?.sound || SETTINGS.alert_default_sound || "siren")})`)}</select>
             <textarea id="am-${p.id}" data-name="${esc(p.name)}" rows="2" style="flex:1 1 320px" placeholder="${esc(SETTINGS.alert_default_message || "")}">${esc(p.alert_message || "")}</textarea>
             <button class="small primary" onclick="saveAlertSettings(${p.id})">Save</button><button class="small" onclick="testAlert(${p.id})">▶ Test</button></div>
           <div class="sub">Will say: “${esc(p.spoken)}”. <code>[NAME]</code> = ${esc(p.name)}; empty = default from Settings.</div>
@@ -471,10 +531,37 @@ async function loadPersonDetail(id) {
 let ALARM_AC = null;
 function alarmCtx() { ALARM_AC = ALARM_AC || new (window.AudioContext || window.webkitAudioContext)(); if (ALARM_AC.state === "suspended") ALARM_AC.resume(); return ALARM_AC; }
 function beep() { try { const ac = alarmCtx(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.18); } catch (e) {} }
+const SOUNDS = [["siren", "siren (civil-defence wail)"], ["horn", "horn (emergency two-tone)"], ["vault", "vault (blast door opening)"], ["radar", "radar (phone-style alarm)"], ["klaxon", "klaxon"], ["chime", "chime"], ["none", "no sound"]];
+const soundOptions = (cur, defaultLabel) => `<option value="" ${!cur ? "selected" : ""}>${defaultLabel}</option>` + SOUNDS.map(([k, l]) => `<option value="${k}" ${cur === k ? "selected" : ""}>${l}</option>`).join("");
+function noiseBuffer(ac, seconds) { const b = ac.createBuffer(1, Math.ceil(seconds * ac.sampleRate), ac.sampleRate); const d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; return b; }
 function playAlarm(kind) {
   kind = kind || SETTINGS.alert_default_sound || "siren";
   if (kind === "none") return 0;
   const ac = alarmCtx(), t0 = ac.currentTime, g = ac.createGain();
+  if (kind === "horn") {              // two-tone emergency horn: 330/415 Hz, 0.7 s each, 4 pairs, resonant
+    const dur = 5.8; g.connect(ac.destination); g.gain.value = 0;
+    const bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 500; bp.Q.value = 1.2; bp.connect(g);
+    for (let i = 0; i < 8; i++) { const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = i % 2 ? 415 : 330; const o2 = ac.createOscillator(); o2.type = "square"; o2.frequency.value = (i % 2 ? 415 : 330) / 2;
+      const og = ac.createGain(); og.gain.value = 0.5; o.connect(og); o2.connect(og); og.connect(bp); o.start(t0 + i * 0.7); o2.start(t0 + i * 0.7); o.stop(t0 + i * 0.7 + 0.66); o2.stop(t0 + i * 0.7 + 0.66);
+      g.gain.setValueAtTime(0.0001, t0 + i * 0.7); g.gain.exponentialRampToValueAtTime(0.9, t0 + i * 0.7 + 0.05); g.gain.setValueAtTime(0.9, t0 + i * 0.7 + 0.55); g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.7 + 0.66); }
+    return dur;
+  }
+  if (kind === "vault") {             // blast door: sub thump, metallic clank, 5 s grinding sweep with tremolo, hiss release
+    const dur = 7;
+    const sub = ac.createOscillator(); sub.type = "sine"; sub.frequency.setValueAtTime(60, t0); sub.frequency.exponentialRampToValueAtTime(30, t0 + 1.2); const sg = ac.createGain(); sg.gain.setValueAtTime(1.0, t0); sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.4); sub.connect(sg); sg.connect(ac.destination); sub.start(t0); sub.stop(t0 + 1.5);
+    [1900, 2600, 3300].forEach((f, i) => { const n = ac.createBufferSource(); n.buffer = noiseBuffer(ac, 0.5); const f1 = ac.createBiquadFilter(); f1.type = "bandpass"; f1.frequency.value = f; f1.Q.value = 25; const ng = ac.createGain(); ng.gain.setValueAtTime(0.6 / (i + 1), t0 + 0.05); ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.9); n.connect(f1); f1.connect(ng); ng.connect(ac.destination); n.start(t0 + 0.05); });
+    const grind = ac.createOscillator(); grind.type = "sawtooth"; grind.frequency.setValueAtTime(70, t0 + 0.8); grind.frequency.linearRampToValueAtTime(150, t0 + 5.8);
+    const lfo = ac.createOscillator(); lfo.frequency.setValueAtTime(9, t0); lfo.frequency.linearRampToValueAtTime(18, t0 + 5.8); const lg = ac.createGain(); lg.gain.value = 0.3; lfo.connect(lg);
+    const gg = ac.createGain(); gg.gain.setValueAtTime(0.0001, t0 + 0.8); gg.gain.exponentialRampToValueAtTime(0.5, t0 + 1.6); gg.gain.setValueAtTime(0.5, t0 + 5.2); gg.gain.exponentialRampToValueAtTime(0.0001, t0 + 6.0); lg.connect(gg.gain);
+    const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.setValueAtTime(600, t0); lp.frequency.linearRampToValueAtTime(1800, t0 + 5.8); grind.connect(lp); lp.connect(gg); gg.connect(ac.destination); grind.start(t0 + 0.8); grind.stop(t0 + 6.1); lfo.start(t0); lfo.stop(t0 + 6.1);
+    const hiss = ac.createBufferSource(); hiss.buffer = noiseBuffer(ac, 1.6); const hp = ac.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 3000; const hg = ac.createGain(); hg.gain.setValueAtTime(0.35, t0 + 5.6); hg.gain.exponentialRampToValueAtTime(0.0001, t0 + 7.0); hiss.connect(hp); hp.connect(hg); hg.connect(ac.destination); hiss.start(t0 + 5.6);
+    return dur;
+  }
+  if (kind === "radar") {             // phone-style alarm: 4 quick 1 kHz/1.25 kHz pips, pause, repeat ×4
+    const dur = 5.2; g.connect(ac.destination); g.gain.value = 0;
+    for (let r = 0; r < 4; r++) for (let i = 0; i < 4; i++) { const t = t0 + r * 1.3 + i * 0.16; const o = ac.createOscillator(); o.type = "square"; o.frequency.value = i % 2 ? 1250 : 1000; o.connect(g); o.start(t); o.stop(t + 0.09); g.gain.setValueAtTime(0.25, t); g.gain.setValueAtTime(0, t + 0.09); }
+    return dur;
+  }
   if (kind === "siren") {
     const dur = 8; const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2200; g.connect(lp); lp.connect(ac.destination);
     g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.6); g.gain.setValueAtTime(0.5, t0 + dur - 0.8); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
@@ -561,6 +648,8 @@ $("#btn-save-settings").onclick = async (e) => {
 };
 async function renderPhone() {
   try {
+    const es = await api("/api/mobile/export_status");
+    $("#export-status").textContent = es.path ? `Exporting to ${es.path}${es.exported_at ? ` (last written ${es.exported_at.slice(0, 16).replace("T", " ")} UTC${es.dirty ? ", changes pending" : ""})` : " (not written yet)"}.` : "(no export folder set yet)";
     const h = await api("/api/health"); const port = location.port || (location.protocol === "https:" ? 443 : 80);
     const addrs = (h.lan_ips || []).map((ip) => `http://${ip}:${port}`);
     $("#phone-info").textContent = `Direct sync address (same Wi-Fi):\n  ${addrs.join("\n  ") || location.origin}\nPassword: ${h.password_required ? "the one in .env" : "none set"}\nIf the phone can't connect, use the library file instead (above).`;
@@ -568,6 +657,8 @@ async function renderPhone() {
     ms.textContent = r.status === 200 ? `laptop-side phone model ready (${Math.round((Number(r.headers.get("content-length")) || 0) / 1048576)} MB)` : "not exported on this laptop (the phone downloads it from GitHub anyway)";
   } catch (e) {}
 }
+$("#btn-export-now").onclick = async () => { try { const r = await api("/api/mobile/export_now", { method: "POST" }); toast("Written: " + r.written); renderPhone(); } catch (e) { onErr(e); } };
+$("#btn-phone-edits").onclick = async () => { try { const body = JSON.parse($("#phone-edits").value); const r = await api("/api/import/phone_settings", { method: "POST", body }); $("#phone-edits-msg").textContent = `applied: ${r.persons} people, ${r.groups} packages`; $("#phone-edits").value = ""; } catch (e) { onErr(e); } };
 $("#btn-export-model").onclick = async () => { try { await api("/api/mobile/export_model", { method: "POST" }); toast("Model export queued"); } catch (e) { onErr(e); } };
 async function renderSelftest() {
   const { job } = await api("/api/selftest").catch(() => ({ job: null })); const st = $("#selftest-status"), out = $("#selftest-result");
