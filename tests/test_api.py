@@ -99,9 +99,12 @@ def test_confirm_reject_name_undo_alerts(client, conn):
     assert conn.execute("SELECT COUNT(*) FROM prints WHERE source_speaker_id=?", (ssid,)).fetchone()[0] == 0
     assert client.get(f"/api/sources/{sid}").json()["speakers"][0]["candidates"][0]["status"] == "open"
 
-    # reject
+    # reject, then undo the rejection
     sp = client.post(f"/api/matches/{mid}/reject").json()
     assert sp["candidates"][0]["status"] == "rejected"
+    sp = client.post(f"/api/matches/{mid}/reopen").json()
+    assert sp["candidates"][0]["status"] == "open" and sp["person"] is None
+    sp = client.post(f"/api/matches/{mid}/reject").json()
 
     # name the speaker as somebody new
     sp = client.post(f"/api/speakers/{ssid}/name", json={"name": "Dave"}).json()
@@ -168,3 +171,31 @@ def test_delete_source_cleans_up(client, conn):
 def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "VoiceFlock" in r.text
+
+
+def test_naming_a_clustered_speaker_names_the_whole_unnamed_voice(client, conn):
+    """Two recordings auto-clustered into 'Unknown Voice 1'. Naming the speaker in one of them must rename
+    the voice (both recordings follow) rather than spawn a new person and reject the 98% look-alike."""
+    pid = conn.execute("INSERT INTO persons(name, kind) VALUES('Unknown Voice 1', 'provisional')").lastrowid
+    gallery.add_prints(conn, pid, None, None, rand_unit(np.random.default_rng(3)), [], "auto")
+    sid1, ss1 = seed_speaker(conn, "hearing A", pid, prob=0.987)
+    sid2, ss2 = seed_speaker(conn, "hearing B", pid, prob=0.95)
+    sp = client.post(f"/api/speakers/{ss1}/name", json={"name": "Sen. Elizabeth Warren"}).json()
+    assert sp["person"]["id"] == pid and sp["person"]["name"] == "Sen. Elizabeth Warren" and sp["person"]["kind"] == "named"
+    assert sp["candidates"][0]["status"] == "confirmed"                      # not rejected
+    assert client.get(f"/api/sources/{sid2}").json()["speakers"][0]["person"]["name"] == "Sen. Elizabeth Warren"
+    assert conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0] == 1
+    # naming another unnamed voice with the same name merges it into Warren
+    pid2 = conn.execute("INSERT INTO persons(name, kind) VALUES('Unknown Voice 2', 'provisional')").lastrowid
+    gallery.add_prints(conn, pid2, None, None, rand_unit(np.random.default_rng(4)), [], "auto")
+    sid3, ss3 = seed_speaker(conn, "hearing C", pid2, prob=0.9)
+    sp = client.post(f"/api/speakers/{ss3}/name", json={"name": "sen. elizabeth warren"}).json()
+    assert sp["person"]["id"] == pid
+    assert conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM source_speakers WHERE person_id=?", (pid,)).fetchone()[0] == 3
+    # a speaker already assigned to a *named* person keeps the old behaviour: reassign just this recording
+    other = conn.execute("INSERT INTO persons(name, kind) VALUES('Bob', 'named')").lastrowid
+    gallery.add_prints(conn, other, None, None, rand_unit(np.random.default_rng(5)), [], "cli")
+    sid4, ss4 = seed_speaker(conn, "hearing D", other, prob=0.8)
+    sp = client.post(f"/api/speakers/{ss4}/name", json={"name": "Carol"}).json()
+    assert sp["person"]["name"] == "Carol" and client.get(f"/api/persons/{other}").json()["name"] == "Bob"

@@ -345,7 +345,9 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                      (person_id, assignment, speaker_id))
         conn.execute("UPDATE matches SET status='confirmed', decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
                      " WHERE source_speaker_id=? AND person_id=?", (speaker_id, person_id))
-        conn.execute("UPDATE matches SET status='rejected' WHERE source_speaker_id=? AND person_id!=? AND status IN ('open','auto')",
+        # any other candidate for this speaker (including an earlier confirmation) contradicts the new assignment
+        conn.execute("UPDATE matches SET status='rejected', decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+                     " WHERE source_speaker_id=? AND person_id!=? AND status IN ('open','auto','confirmed')",
                      (speaker_id, person_id))
         if old_pid and old_pid != person_id:
             delete_empty_provisional(conn, old_pid)
@@ -1031,13 +1033,33 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
 
     @app.post("/api/speakers/{speaker_id}/name")
     def name_speaker(speaker_id: int, body: NameIn, conn=Depends(get_conn)):
+        """Name the voice behind a recording-speaker. If that speaker currently belongs to an unnamed
+        (provisional) voice, the whole voice is named: its other recordings come along instead of being
+        left behind as a rejected look-alike. A name that already exists merges the unnamed voice into it."""
+        sp = db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,))
+        if sp is None:
+            raise HTTPException(404, "speaker not found")
+        cur = db.row(conn, "SELECT * FROM persons WHERE id=?", (sp["person_id"],)) if sp["person_id"] else None
         with db.tx(conn):
             if body.person_id:
                 pid = body.person_id
                 if not db.row(conn, "SELECT id FROM persons WHERE id=?", (pid,)):
                     raise HTTPException(404, "person not found")
             else:
-                pid = find_or_create_person(conn, body.name or "")
+                name = (body.name or "").strip()
+                if not name:
+                    raise HTTPException(400, "name required")
+                existing = db.row(conn, "SELECT id FROM persons WHERE name=? COLLATE NOCASE AND kind='named'", (name,))
+                if cur and cur["kind"] == "provisional":
+                    if existing and int(existing["id"]) != int(cur["id"]):
+                        merge_persons(conn, int(cur["id"]), int(existing["id"]))
+                        pid = int(existing["id"])
+                    else:
+                        conn.execute("UPDATE persons SET name=?, kind='named', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                                     (name, int(cur["id"])))
+                        pid = int(cur["id"])
+                else:
+                    pid = int(existing["id"]) if existing else find_or_create_person(conn, name)
             assign_speaker(conn, speaker_id, pid, "named", "named")
             queue_rematch(conn)
         return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (speaker_id,)))
@@ -1068,6 +1090,16 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             if sp and sp["person_id"] == m["person_id"] and sp["assignment"] in ("auto", "confirmed"):
                 unassign_speaker(conn, int(sp["id"]))
             conn.execute("UPDATE matches SET status='rejected', decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (mid,))
+        return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (m["source_speaker_id"],)))
+
+    @app.post("/api/matches/{mid}/reopen")
+    def reopen_match(mid: int, conn=Depends(get_conn)):
+        """Undo a rejection: the candidate is back on the table (nothing is assigned)."""
+        m = db.row(conn, "SELECT * FROM matches WHERE id=?", (mid,))
+        if not m:
+            raise HTTPException(404)
+        with db.tx(conn):
+            conn.execute("UPDATE matches SET status='open', decided_at=NULL WHERE id=? AND status='rejected'", (mid,))
         return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (m["source_speaker_id"],)))
 
     @app.get("/api/alerts")

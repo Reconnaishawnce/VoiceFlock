@@ -197,7 +197,7 @@ async function loadHome() {
     $("#alerts-recurring").innerHTML = a.recurring_unknown.length ? a.recurring_unknown.slice(0, 10).map((r) => `<div class="item">
       <div class="title"><a class="link" onclick="openPerson(${r.person_id})">${esc(r.name)}</a> <span class="muted">· ${r.n_sources} recordings · ${fmtT(r.speech_seconds)}</span></div>
       ${heardInRich(r.heard_in.slice(0, 1))}
-      <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}"><button class="small" onclick="namePerson(${r.person_id})">Name</button></div></div>`).join("") : empty("No unnamed voice has shown up twice yet.");
+      <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}" onkeydown="if(event.key==='Enter')namePerson(${r.person_id}, this)"><button class="small" onclick="namePerson(${r.person_id}, this)">Name</button></div></div>`).join("") : empty("No unnamed voice has shown up twice yet.");
     const t = o.stats;
     $("#ov-tiles").innerHTML = [[t.hours.toFixed(1), "hours of recordings"], [t.recordings, "recordings"], [t.known, "known people"], [t.unknown, "unnamed voices"], [t.speech_hours.toFixed(1), "hours of attributed speech"], [t.open_alerts, "alerts to review"]]
       .map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
@@ -278,10 +278,12 @@ async function loadSourceDetail(id) {
     const el = $("#lib-detail");
     if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
     el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]);
-    const openId = !$("#drawer").classList.contains("hidden") && STATE.src?.id === src.id ? Number(($("#drawer #nm-" ) || {}).id) : null;
+    const sameSource = STATE.src?.id === src.id;
     el.innerHTML = `<button class="back" onclick="back('library')">← Back</button><div class="card">${sourceView(src)}</div>`;
     el.classList.add("tab");
     STATE.src = src;
+    // the side panel shows a speaker of this recording: redraw it with the fresh data (after naming, confirming, undo)
+    if (sameSource && STATE.drawerSpeaker && !$("#drawer").classList.contains("hidden")) openSpeaker(STATE.drawerSpeaker, false);
     const cue = STATE.seekTo; STATE.seekTo = null;
     if (src.media_kind === "youtube") {
       await loadYT();
@@ -327,21 +329,28 @@ function openSpeaker(id, play = false) {
   $("#drawer-title").innerHTML = `${esc(sp.label)} <span class="muted">· ${fmtT(sp.speech_seconds)} of speech</span>`;
   const top = sp.candidates[0]; const thr = Number(SETTINGS.match_threshold || 0.75);
   const who = sp.person ? `<a class="link" onclick="openPerson(${sp.person.id})"><b>${esc(sp.person.name)}</b></a> <span class="pill ${sp.person.kind}">${sp.person.kind === "named" ? "known" : "unnamed"}</span>` : top && top.probability >= thr && top.person_kind === "named" ? `probably <a class="link" onclick="openPerson(${top.person_id})"><b>${esc(top.person_name)}</b></a>` : `<b>Unknown</b>`;
+  const unnamed = !sp.person || sp.person.kind === "provisional";
   $("#drawer-body").innerHTML = `
     <div style="margin-bottom:8px">${who}${sp.review_status === "pending" ? ' <span class="pill provisional">to review</span>' : ""}</div>
-    <div class="actions">${sp.longest ? `<button class="small primary" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ play longest turn (${fmtT(sp.longest.start_s)}, ${sp.longest.seconds}s)</button>` : ""}</div>
+    <div class="namebox">
+      <div class="nb-label">${unnamed ? "Who is this?" : "Rename or reassign"}</div>
+      <div class="inline" style="margin:0"><input placeholder="${unnamed ? "Type a name and press Enter" : sp.person.name}" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)"><button class="primary" onclick="nameSpeaker(${sp.id}, this)">${unnamed ? "Name" : "Save"}</button></div>
+      <div class="muted" style="font-size:12px;margin-top:6px">${sp.person && sp.person.kind === "provisional" ? `Names <b>${esc(sp.person.name)}</b> everywhere it was heard. ` : ""}An existing name merges them with that person.</div>
+    </div>
+    <div class="actions">${sp.longest ? `<button class="small" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ play longest turn (${fmtT(sp.longest.start_s)}, ${sp.longest.seconds}s)</button>` : ""}</div>
     <div class="chips" style="margin:6px 0">${(sp.segments || []).slice(0, 14).map((g) => `<button onclick="seek(${src.id}, ${g.start_s})">${fmtT(g.start_s)}</button>`).join("")}${sp.segments.length > 14 ? `<span class="muted">+${sp.segments.length - 14}</span>` : ""}</div>
     ${(sp.stills || []).length ? `<div class="strip">${sp.stills.map((x) => `<img class="thumb" loading="lazy" src="${esc(x.url)}" title="jump to ${fmtT(x.t)}" onclick="seek(${src.id}, ${x.t})">`).join("")}</div>` : ""}
-    ${sp.clip_url ? clip(sp.clip_url) : ""}
-    <div class="inline" style="margin:8px 0"><input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id})"><button class="small primary" onclick="nameSpeaker(${sp.id})">${sp.person ? "Name" : "Add"}</button></div>
+    ${sp.clip_url ? `<div class="turn">this voice, best ${SETTINGS.clip_seconds || 8} s</div>${clip(sp.clip_url)}` : ""}
     <div class="actions">${sp.person ? `<button class="small" onclick="openPerson(${sp.person.id})">Open profile · other clips</button><button class="small" onclick="unassign(${sp.id})">Not them / undo</button>` : ""}
       ${sp.review_status === "pending" ? `<button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip for now</button><button class="small" onclick="setReview(${sp.id}, 'done')">Mark done</button>` : `<button class="small" onclick="setReview(${sp.id}, 'pending')">Add to review queue</button>`}</div>
     <textarea class="notes" placeholder="Notes about this voice (context, guesses, links…)" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea>
-    <h3>Candidates</h3><div id="cands-${sp.id}">${candidateTable(sp)}</div>`;
+    <h3>Candidates <span class="muted" style="text-transform:none;letter-spacing:0">· listen to both before deciding</span></h3><div id="cands-${sp.id}">${candidateTable(sp)}</div>`;
+  const fresh = STATE.drawerSpeaker !== id || $("#drawer").classList.contains("hidden");
+  STATE.drawerSpeaker = id;
   $("#drawer").classList.remove("hidden"); document.body.classList.add("drawer-open");
-  setTimeout(() => $(`#drawer #nm-${sp.id}`)?.focus(), 250);
+  if (fresh) setTimeout(() => $(`#drawer #nm-${sp.id}`)?.focus(), 250);
 }
-function closeDrawer() { $("#drawer")?.classList.add("hidden"); document.body.classList.remove("drawer-open"); }
+function closeDrawer() { STATE.drawerSpeaker = null; $("#drawer")?.classList.add("hidden"); document.body.classList.remove("drawer-open"); }
 async function saveSourceNotes(id, v) { try { await api(`/api/sources/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
 async function saveSpeakerNotes(id, v) { try { await api(`/api/speakers/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
 async function setReview(id, status) { try { await api(`/api/speakers/${id}`, { method: "PATCH", body: { review_status: status } }); toast(status === "pending" ? "Added to review queue" : status === "done" ? "Done" : "Skipped"); render(); loadStats(); } catch (e) { onErr(e); } }
@@ -378,11 +387,14 @@ function candidateTable(sp, showAll = false) {
   return `<table class="cands"><tr><th>#</th><th>Candidate</th><th>Probability</th><th>Heard in</th><th></th></tr>` +
     list.map((c) => {
       const act = c.status === "confirmed" ? `<span class="pill named">confirmed</span> <button class="small" onclick="unassign(${sp.id})">undo</button>`
-        : c.status === "rejected" ? `<span class="pill">rejected</span>`
+        : c.status === "rejected" ? `<span class="pill">rejected</span> <button class="small" onclick="reopenMatch(${c.id})">Undo</button>`
         : `<button class="small primary" onclick="confirmMatch(${c.id}, ${c.probability})">Confirm</button> <button class="small" onclick="rejectMatch(${c.id})">Reject</button>`;
+      // the candidate's own voice, so the two can be compared by ear (longest-speech recording that has a clip)
+      const ref = (c.heard_in || []).filter((h) => h.clip_url).sort((a, b) => (b.speech_seconds || 0) - (a.speech_seconds || 0))[0];
+      const listen = ref ? `<div class="cmp"><span class="muted">their voice in ${esc(ref.name)}</span>${clip(ref.clip_url)}</div>` : "";
       return `<tr><td>${c.rank}</td><td><a class="link" onclick="openPerson(${c.person_id})">${esc(c.person_name)}</a><span class="pill ${c.person_kind}">${c.person_kind === "named" ? "known" : "unnamed"}</span>${sp.person_id === c.person_id ? '<span class="pill named">assigned</span>' : ""}</td>
         <td><span class="prob ${probCls(c.probability, thr, hi)}">${pct(c.probability)}</span>${c.rank === 1 ? `<span class="margin">+${pct(c.margin)}</span>` : ""}<div class="pbar"><i style="width:${pct(c.probability)}"></i></div></td>
-        <td class="sub heard">${heardIn(c.heard_in)}</td><td class="act">${act}</td></tr>`;
+        <td class="sub heard">${heardIn(c.heard_in)}${listen}</td><td class="act">${act}</td></tr>`;
     }).join("") + `</table>` + weakNote;
 }
 function toggleWeak(id) { const holder = $(`#cands-${id}`); const sp = (STATE.src?.speakers || []).concat(STATE.reviewItems || []).find((x) => x.id === id); if (!holder || !sp) return; holder.dataset.all = holder.dataset.all ? "" : "1"; holder.innerHTML = candidateTable(sp, !!holder.dataset.all); }
@@ -407,8 +419,8 @@ function speakerCard(sp, src, idx = 0) {
     ${qualityWarning(sp)}
     <div id="cands-${sp.id}">${candidateTable(sp)}</div>
     <div class="actions">
-      <input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" style="max-width:260px">
-      <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id})">${sp.person ? "Name" : "Add to library"}</button>
+      <input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" style="max-width:260px" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)">
+      <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id}, this)">${sp.person ? "Name" : "Add to library"}</button>
       ${sp.person_id ? `<button class="small" onclick="unassign(${sp.id})">Unassign / undo</button>` : ""}
     </div></div>`;
 }
@@ -421,10 +433,17 @@ async function confirmMatch(id, p) {
 }
 async function rejectMatch(id) { try { await api(`/api/matches/${id}/reject`, { method: "POST" }); toast("Rejected"); render(); } catch (e) { onErr(e); } }
 async function unassign(id) { try { await api(`/api/speakers/${id}/unassign`, { method: "POST" }); toast("Unassigned"); render(); loadStats(); } catch (e) { onErr(e); } }
-async function nameSpeaker(id) {
-  const name = $(`#nm-${id}`).value.trim(); if (!name) return toast("Type a name first", true);
-  try { await api(`/api/speakers/${id}/name`, { method: "POST", body: { name } }); toast(`Saved as ${name}`); render(); loadStats(); } catch (e) { onErr(e); }
+/** The input that belongs with a button (or the input itself on Enter). Ids repeat across tabs and the side
+ *  panel, so looking an input up by id can land on a hidden copy; always resolve relative to the element. */
+function inputNear(el) { if (!el) return null; if (el.tagName === "INPUT") return el; return el.parentElement?.querySelector("input") || el.closest(".actions, .inline, .item, .spk")?.querySelector("input"); }
+async function nameSpeaker(id, el) {
+  const input = inputNear(el); const name = (input?.value || "").trim(); if (!name) { input?.focus(); return toast("Type a name first", true); }
+  try {
+    const sp = await api(`/api/speakers/${id}/name`, { method: "POST", body: { name } });
+    toast(`Saved as ${sp.person?.name || name}`); render(); loadStats();
+  } catch (e) { onErr(e); }
 }
+async function reopenMatch(id) { try { await api(`/api/matches/${id}/reopen`, { method: "POST" }); toast("Rejection undone"); render(); } catch (e) { onErr(e); } }
 async function forgetSource(id) { if (!confirm("Remove all prints and unnamed voices created from this recording? Results stay visible.")) return; try { await api(`/api/sources/${id}/forget`, { method: "POST" }); toast("Forgotten"); render(); loadStats(); } catch (e) { onErr(e); } }
 async function makeStills(id) { try { await api(`/api/sources/${id}/stills`, { method: "POST" }); toast("Stills queued"); } catch (e) { onErr(e); } }
 async function stillsBackfill() { try { const r = await api("/api/stills/backfill", { method: "POST" }); toast(r.queued ? `Queued stills for ${r.queued} recordings (≈${r.estimated_mb} MB)` : "Every video recording already has stills"); } catch (e) { onErr(e); } }
@@ -504,14 +523,14 @@ async function loadGroupDetail(gid) {
           <button class="small" onclick="runAlert('Nancy Pelosi', $('#gs-${g.id}').value || null, $('#gm-${g.id}').value || null)">▶ Test</button></div>
         <div class="sub">A person's own sound or line (set on their profile) overrides the package's. <code>[NAME]</code> is replaced per person.</div>
         <h3>Members</h3>
-        <div class="inline" style="max-width:560px"><input id="addm-${g.id}" placeholder="Add a known person by name…" list="person-names"><button class="small" onclick="addMemberByName(${g.id})">Add</button><button class="small" onclick="addAllKnown(${g.id})" title="Add every known person">Add all known (${named.length})</button></div>
+        <div class="inline" style="max-width:560px"><input id="addm-${g.id}" placeholder="Add a known person by name…" list="person-names"><button class="small" onclick="addMemberByName(${g.id}, this)">Add</button><button class="small" onclick="addAllKnown(${g.id})" title="Add every known person">Add all known (${named.length})</button></div>
         ${g.members.map((m) => `<div class="appear"><div>${glyphSvg(m.glyph, "var(--s1)", 24)} <a class="link" onclick="openPerson(${m.id})"><b>${esc(m.name)}</b></a> <span class="muted">· ${m.n_sources} rec · ${fmtT(m.speech_seconds)}${m.alert_sound || m.alert_message ? " · has own alert settings" : ""}</span></div>
           <div class="actions"><button class="small" onclick="removeFromGroup(${g.id}, ${m.id})">Remove</button></div></div>`).join("") || '<p class="muted">No members yet.</p>'}
       </div>`;
   } catch (e) { onErr(e); }
 }
-async function addMemberByName(gid) {
-  const name = $(`#addm-${gid}`).value.trim(); if (!name) return;
+async function addMemberByName(gid, el) {
+  const name = (inputNear(el)?.value || "").trim(); if (!name) return;
   try { const named = await loadNames(); const p = named.find((x) => x.name.toLowerCase() === name.toLowerCase()); if (!p) throw new Error("no known person with that name");
     await api(`/api/groups/${gid}/members`, { method: "POST", body: { person_ids: [p.id] } }); render(); } catch (e) { onErr(e); }
 }
@@ -536,7 +555,7 @@ async function loadPeople() {
           <div><a class="link" onclick="openSourceAt(${sp.source.id}, ${h.watch_at || 0})"><b>${esc(sp.source.name)}</b></a> <span class="muted">· ${esc(sp.label)} · ${fmtT(sp.speech_seconds)} of speech${sp.source.notes ? " · " + esc(sp.source.notes.slice(0, 80)) : ""}</span></div>
           <div class="actions" style="margin:4px 0">${watchBtn(h)}${sp.clip_url ? clip(sp.clip_url) : ""}</div>
           <div id="cands-${sp.id}">${candidateTable(sp)}</div>
-          <div class="inline" style="margin:6px 0"><input placeholder="Who is this? Type a name…" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id})"><button class="small primary" onclick="nameSpeaker(${sp.id})">Add</button><button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip</button></div>
+          <div class="inline" style="margin:6px 0"><input placeholder="Who is this? Type a name…" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)"><button class="small primary" onclick="nameSpeaker(${sp.id}, this)">Add</button><button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip</button></div>
           <textarea class="notes" placeholder="Notes about this voice" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea></div></div>`; }).join("") : empty("Nothing to review. Upload a recording with the Review intent, or open a recording and press “Add voices to review queue”.");
     } else if (STATE.peopleView === "known") {
       const named = await loadNames();
@@ -550,7 +569,7 @@ async function loadPeople() {
       el.innerHTML = `<p class="muted">Background data, most-heard first. Open one to watch where it was heard; <b>Name</b> it if you know who it is; <b>Keep</b> tracks it as a known voice without a name.</p><div class="grid">` + u.voices.filter((v) => v.name.toLowerCase().includes(q)).map((v) => `<div class="vcard">
         <div class="nm"><a class="link" onclick="openPerson(${v.id})">${esc(v.name)}</a>${bell(v)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
         ${heardInRich(v.heard_in.slice(0, 2))}
-        <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
+        <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}" onkeydown="if(event.key==='Enter')namePerson(${v.id}, this)"><button class="small primary" onclick="namePerson(${v.id}, this)">Name</button></div>
         <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || empty("No unnamed voices yet. They appear as recordings are processed.");
     } else if (STATE.peopleView === "packages") {
       const j = await api("/api/groups"); ALLGROUPS = j.groups;
@@ -572,8 +591,8 @@ async function loadPeople() {
     }
   } catch (e) { onErr(e); }
 }
-async function namePerson(id) {
-  const name = $(`#pn-${id}`).value.trim(); if (!name) return toast("Type a name first", true);
+async function namePerson(id, el) {
+  const input = inputNear(el); const name = (input?.value || "").trim(); if (!name) { input?.focus(); return toast("Type a name first", true); }
   try { await api(`/api/persons/${id}`, { method: "PATCH", body: { name } }); toast(`Named ${name}`); render(); loadStats(); } catch (e) { onErr(e); }
 }
 async function mergePerson(id) { const into = $(`#mg-${id}`).value; if (!into) return; mergeInto(id, Number(into)); }
@@ -602,7 +621,7 @@ async function loadPersonDetail(id) {
         <div class="profile">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 56)}
           <div><h2>${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span>${bell(p)}</h2>
           <div class="meta">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints${p.notes ? " · " + esc(p.notes) : ""}</div></div>
-          <div class="actions" style="margin-left:auto">${p.kind === "provisional" ? `<input id="pn-${p.id}" placeholder="Name this voice" list="person-names" style="max-width:200px"><button class="small primary" onclick="namePerson(${p.id})">Name</button><button class="small" onclick="acceptPerson(${p.id})">Keep</button>` : `<button class="small" onclick="renamePerson(${p.id})">Rename</button>`}<button class="small danger" onclick="deletePerson(${p.id})">Delete</button></div>
+          <div class="actions" style="margin-left:auto">${p.kind === "provisional" ? `<input id="pn-${p.id}" placeholder="Name this voice" list="person-names" style="max-width:200px" onkeydown="if(event.key==='Enter')namePerson(${p.id}, this)"><button class="small primary" onclick="namePerson(${p.id}, this)">Name</button><button class="small" onclick="acceptPerson(${p.id})">Keep</button>` : `<button class="small" onclick="renamePerson(${p.id})">Rename</button>`}<button class="small danger" onclick="deletePerson(${p.id})">Delete</button></div>
         </div>
         <div class="sub" style="margin:6px 0">Packages: ${(p.groups || []).map((g) => `<span class="pill ${g.alert ? "named" : ""}" title="${g.alert ? "this package alerts" : ""}">${esc(g.name)} <a class="link" onclick="removeFromGroup(${g.id}, ${p.id})" title="remove">✕</a></span>`).join(" ") || '<span class="muted">none</span>'}
           <select id="addg-${p.id}" style="max-width:200px;display:inline-block;width:auto"><option value="">+ add to package…</option>${(ALLGROUPS || []).filter((g) => !(p.groups || []).some((x) => x.id === g.id)).map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}<option value="__new">+ new package…</option></select>
