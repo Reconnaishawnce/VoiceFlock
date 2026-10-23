@@ -23,7 +23,9 @@ const mediaPlaying = () => $$("audio,video").some((a) => !a.paused && !a.ended) 
 $$("#tabs button").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
 function go(route) { if (location.hash !== "#" + route) location.hash = route; else render(); }
 function render() {
-  const [tab, id] = (location.hash.replace("#", "") || "home").split("/");
+  const [path, qs] = (location.hash.replace("#", "") || "home").split("?");
+  STATE.seekTo = qs && /^t=/.test(qs) ? Number(qs.slice(2)) : null;
+  const [tab, id] = path.split("/");
   STATE.tab = $(`#tab-${tab}`) ? tab : "home";
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === STATE.tab));
   $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== "tab-" + STATE.tab));
@@ -34,6 +36,7 @@ function render() {
 }
 window.addEventListener("hashchange", render);
 const openSource = (id) => go(`library/${id}`);
+const openSourceAt = (id, t) => go(`library/${id}?t=${Math.max(0, Math.floor(t || 0))}`);
 const openPerson = (id) => go(`people/${id}`);
 function refreshTab() { if (!mediaPlaying()) render(); }
 
@@ -145,8 +148,22 @@ function glyphSvg(g, color = "var(--s1)", size = 28) {
   const bars = g.map((v, i) => { const a = (i / n) * Math.PI * 2, r = r0 + v * (r1 - r0); return `<line x1="${cx + Math.cos(a) * r0}" y1="${cy + Math.sin(a) * r0}" x2="${cx + Math.cos(a) * r}" y2="${cy + Math.sin(a) * r}" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>`; }).join("");
   return `<svg class="glyph" width="${size}" height="${size}" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="13" fill="var(--panel2)"/>${bars}</svg>`;
 }
-function heardIn(list) { return list && list.length ? list.map((h) => `<a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}`).join(", ") : `<span class="muted">(no other recordings)</span>`; }
+function heardIn(list) { return list && list.length ? list.map((h) => `<a class="link" onclick="openSourceAt(${h.id}, ${h.watch_at ?? h.first_start_s ?? 0})" title="open cued to this voice">${esc(h.name)} ▶ ${fmtT(h.watch_at ?? h.first_start_s)}</a>`).join(", ") : `<span class="muted">(no other recordings)</span>`; }
 function clip(url) { return url ? `<audio controls preload="metadata" src="${url}"></audio>` : ""; }
+/** "▶ watch" + a video still for a heard-in entry: opens the recording with the video cued to this voice. */
+function watchBtn(h) {
+  const t = h.watch_at ?? h.first_start_s ?? 0;
+  const label = h.media_kind === "audio" ? "▶ listen in context" : "▶ watch";
+  return `<button class="small" onclick="openSourceAt(${h.id}, ${t})" title="open the recording cued to ${fmtT(t)}">${label} @ ${fmtT(t)}</button>`;
+}
+function thumb(h) {
+  if (!h.youtube_id) return "";
+  const t = h.watch_at ?? h.first_start_s ?? 0;
+  return `<img class="thumb" src="https://i.ytimg.com/vi/${esc(h.youtube_id)}/mqdefault.jpg" alt="" onclick="openSourceAt(${h.id}, ${t})" title="watch at ${fmtT(t)}">`;
+}
+function heardInRich(list) {
+  return list && list.length ? list.map((h) => `<div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech</span><div class="actions" style="margin:4px 0 0">${watchBtn(h)}</div>${clip(h.clip_url)}</div></div>`).join("") : `<span class="muted">(no other recordings)</span>`;
+}
 
 /* ---------------- HOME ---------------- */
 let OV = null;
@@ -158,13 +175,13 @@ async function loadHome() {
     $("#alerts-known").innerHTML = a.known.length ? a.known.slice(0, 30).map((k) => `<div class="item">
       <div class="title"><a class="link" onclick="openPerson(${k.person_id})">${esc(k.person_name)}</a> in <a class="link" onclick="openSource(${k.source_id})">${esc(k.source_name)}</a> at ${fmtT(k.first_start_s)}
         <span class="prob ${probCls(k.probability, thr, a.confirm_threshold)}">${pct(k.probability)}</span> <span class="muted">(+${pct(k.margin)} over #2)</span>${k.status === "confirmed" ? '<span class="pill named">confirmed</span>' : ""}</div>
-      <div class="sub">also heard in: ${heardIn(k.heard_in)} · speech ${fmtT(k.speech_seconds)} · quality ${Math.round(k.quality_score || 0)}</div>
+      <div class="sub">speech ${fmtT(k.speech_seconds)} · quality ${Math.round(k.quality_score || 0)} · also heard in: ${heardIn(k.heard_in)}</div>
       ${clip(k.clip_url)}
       <div class="actions">${k.status === "confirmed" ? `<button class="small" onclick="unassign(${k.speaker_id})">Undo confirm</button>` : `<button class="small primary" onclick="confirmMatch(${k.match_id}, ${k.probability})">Confirm</button><button class="small" onclick="rejectMatch(${k.match_id})">Reject</button>`}
-        <button class="small" onclick="openSource(${k.source_id})">Open recording</button></div></div>`).join("") : `<p class="muted">Nothing yet. Add recordings in Library and identify people in People.</p>`;
+        <button class="small" onclick="openSourceAt(${k.source_id}, ${k.first_start_s || 0})">▶ watch @ ${fmtT(k.first_start_s)}</button></div></div>`).join("") : `<p class="muted">Nothing yet. Add recordings in Library and identify people in People.</p>`;
     $("#alerts-recurring").innerHTML = a.recurring_unknown.length ? a.recurring_unknown.slice(0, 10).map((r) => `<div class="item">
       <div class="title"><a class="link" onclick="openPerson(${r.person_id})">${esc(r.name)}</a> <span class="muted">· ${r.n_sources} recordings · ${fmtT(r.speech_seconds)}</span></div>
-      ${clip(r.heard_in[0]?.clip_url)}
+      ${heardInRich(r.heard_in.slice(0, 1))}
       <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}"><button class="small" onclick="namePerson(${r.person_id})">Name</button></div></div>`).join("") : `<p class="muted">No unnamed voice has shown up twice yet.</p>`;
     const t = o.stats;
     $("#ov-tiles").innerHTML = [[t.hours.toFixed(1), "hours of recordings"], [t.recordings, "recordings"], [t.known, "known people"], [t.unknown, "unnamed voices"], [t.speech_hours.toFixed(1), "hours of attributed speech"], [t.open_alerts, "alerts to review"]]
@@ -241,12 +258,13 @@ async function loadSourceDetail(id) {
     if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
     el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]);
     el.innerHTML = `<button class="back" onclick="go('library')">← Library</button><div class="card">${sourceView(src)}</div>`;
+    const cue = STATE.seekTo; STATE.seekTo = null;
     if (src.media_kind === "youtube") {
       await loadYT();
-      YTP = new YT.Player(`yt-${src.id}`, { videoId: src.youtube_id, playerVars: { rel: 0, modestbranding: 1 }, events: { onReady: () => {}, onStateChange: (e) => {
+      YTP = new YT.Player(`yt-${src.id}`, { videoId: src.youtube_id, playerVars: { rel: 0, modestbranding: 1, start: cue != null ? Math.floor(cue) : undefined }, events: { onReady: () => { if (cue != null) { YTP.seekTo(cue, true); YTP.playVideo(); } }, onStateChange: (e) => {
         clearInterval(YT_TICK); if (e.data === 1) YT_TICK = setInterval(() => { const c = $(`#tl-${src.id} .cursor`); if (c && src.duration_s) c.style.left = (YTP.getCurrentTime() / src.duration_s) * 100 + "%"; }, 500); } } });
-    } else YTP = null;
-    $$(".tab:not(.hidden) *[data-autofocus]").forEach((x) => x.focus());
+    } else { YTP = null; if (cue != null) setTimeout(() => seek(src.id, cue), 150); }
+    if (cue != null) $("#lib-detail .player")?.scrollIntoView({ block: "start", behavior: "smooth" });
   } catch (e) { onErr(e); }
 }
 function sourceView(src) {
@@ -451,7 +469,7 @@ async function loadPeople() {
       const mergeOpts = (self) => `<option value="">Merge into…</option>` + u.voices.filter((v) => v.id !== self).map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("") + named.map((p) => `<option value="${p.id}">${esc(p.name)} (known)</option>`).join("");
       el.innerHTML = `<p class="muted">Background data, most-heard first. Open one to watch where it was heard; <b>Name</b> it if you know who it is; <b>Keep</b> tracks it as a known voice without a name.</p><div class="grid">` + u.voices.filter((v) => v.name.toLowerCase().includes(q)).map((v) => `<div class="vcard">
         <div class="nm"><a class="link" onclick="openPerson(${v.id})">${esc(v.name)}</a>${bell(v)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
-        ${v.heard_in.slice(0, 2).map((h) => `<div class="sub"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)}</div>${clip(h.clip_url)}`).join("")}
+        ${heardInRich(v.heard_in.slice(0, 2))}
         <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
         <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || `<p class="muted">No unnamed voices yet.</p>`;
     } else if (STATE.peopleView === "packages") {
@@ -516,8 +534,8 @@ async function loadPersonDetail(id) {
           <div class="sub">Will say: “${esc(p.spoken)}”. <code>[NAME]</code> = ${esc(p.name)}; empty = default from Settings.</div>
         </details>
         <h3>Heard in ${p.heard_in.length} recordings</h3>
-        ${p.heard_in.map((h) => `<div class="appear"><div><a class="link" onclick="openSource(${h.id})"><b>${esc(h.name)}</b></a> <span class="muted">from ${fmtT(h.first_start_s)} · <span class="pill">${esc(h.assignment)}</span></span>${clip(h.clip_url)}</div>
-          <div class="actions"><button class="small" onclick="openSource(${h.id})">Open recording</button><button class="small" onclick="unassign(${h.speaker_id})" title="This recording is not them">Not them</button></div></div>`).join("") || '<p class="muted">No recordings yet (enrolled from the command line or imported).</p>'}
+        ${p.heard_in.map((h) => `<div class="appear"><div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})"><b>${esc(h.name)}</b></a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech · <span class="pill">${esc(h.assignment)}</span></span>${clip(h.clip_url)}</div></div>
+          <div class="actions">${watchBtn(h)}<button class="small" onclick="unassign(${h.speaker_id})" title="This recording is not them">Not them</button></div></div>`).join("") || '<p class="muted">No recordings yet (enrolled from the command line or imported).</p>'}
         <details><summary>Details: prints and recent matches</summary>
           <table><tr><th>print</th><th>type</th><th>origin</th><th>recording</th><th>speech</th><th>added</th></tr>
           ${p.prints.map((pr) => `<tr><td>${pr.id}</td><td>${pr.is_mean ? "mean" : "chunk"}</td><td>${esc(pr.origin)}</td><td>${pr.source_id ? `<a class="link" onclick="openSource(${pr.source_id})">${esc(pr.source_name)}</a> / ${esc(pr.label)}` : "cli / import"}</td><td>${pr.speech_seconds ? fmtT(pr.speech_seconds) : ""}</td><td class="muted">${esc((pr.created_at || "").slice(0, 16))}</td></tr>`).join("")}</table>

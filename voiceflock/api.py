@@ -239,7 +239,9 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
 
     def person_sources(conn, person_id: int, exclude_source: int | None = None, limit: int = 20) -> list[dict]:
         """Recordings where this person's voice was heard (via assigned speakers), oldest first."""
-        q = ("SELECT DISTINCT s.id, s.name, s.created_at, ss.first_start_s, ss.id AS speaker_id, ss.assignment, ss.clip_path"
+        q = ("SELECT DISTINCT s.id, s.name, s.created_at, s.url, s.orig_path, ss.first_start_s, ss.id AS speaker_id, ss.assignment, ss.clip_path,"
+             " ss.speech_seconds,"
+             " (SELECT start_s FROM segments g WHERE g.source_speaker_id=ss.id ORDER BY (end_s-start_s) DESC LIMIT 1) AS longest_start_s"
              " FROM source_speakers ss JOIN sources s ON s.id=ss.source_id WHERE ss.person_id=? AND s.status!='deleted'")
         params: list[Any] = [person_id]
         if exclude_source is not None:
@@ -250,6 +252,10 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         out = db.rows(conn, q, tuple(params))
         for o in out:
             o["clip_url"] = f"/clips/{o['clip_path']}" if o.get("clip_path") else None
+            o["youtube_id"] = youtube_id(o.get("url"))
+            op = o.pop("orig_path", None)
+            o["media_kind"] = "youtube" if o["youtube_id"] else ("video" if op and Path(op).suffix.lower() in VIDEO_EXTS else "audio")
+            o["watch_at"] = o["longest_start_s"] if o.get("longest_start_s") is not None else o.get("first_start_s")
         return out
 
     def person_out(conn, p: dict) -> dict:
