@@ -40,5 +40,5 @@ def test_wipe_keeps_settings_and_models(data_dir, conn):
         # restart refuses when not supervised
         assert c.post("/api/admin/restart").status_code == 400
         h = c.get("/api/health").json()
-        assert h["supervised"] is False and h["started_at"] and h["version"] == "0.2.0"
+        assert h["supervised"] is False and h["started_at"] and h["version"] == __import__("voiceflock").__version__
         assert c.get("/api/admin/update/status").json()["running"] is False

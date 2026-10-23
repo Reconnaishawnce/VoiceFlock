@@ -6,8 +6,11 @@ const fmtT = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(
 const pct = (p) => (p * 100).toFixed(1) + "%";
 const probCls = (p, thr, hi) => p >= hi ? "hi" : p >= thr ? "mid" : "lo";
 const COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+const EMPTY_SVG = `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M10 38v-12M19 46V18M28 42V22M37 50V14M46 40V24M55 36v-8"/></svg>`;
+const empty = (text) => `<div class="empty">${EMPTY_SVG}<div>${text}</div></div>`;
+const skeleton = (n = 4) => Array.from({ length: n }, (_, i) => `<div class="skel" style="width:${70 - (i % 3) * 15}%"></div>`).join("");
 const elapsed = (iso) => { if (!iso) return ""; const s = Math.max(0, (Date.now() - Date.parse(iso + (iso.endsWith("Z") ? "" : "Z"))) / 1000); return fmtT(s); };
-const APP_VERSION = "0.2.0";   // must match voiceflock/__init__.py; a mismatch means the server was not restarted after an update
+const APP_VERSION = "0.2.1";   // must match voiceflock/__init__.py; a mismatch means the server was not restarted after an update
 let SETTINGS = {}, SPECS = {}, STATE = { tab: "home", sourceId: null, personId: null, peopleView: "known", matchSource: null };
 let HEALTH = null;
 
@@ -185,16 +188,16 @@ async function loadHome() {
     const thr = Number(SETTINGS.match_threshold || 0.75);
     $("#alert-hint").textContent = `≥ ${pct(thr)} · confirm only when very sure (≥ ${pct(a.confirm_threshold)})`;
     $("#alerts-known").innerHTML = a.known.length ? a.known.slice(0, 30).map((k) => `<div class="item">
-      <div class="title"><a class="link" onclick="openPerson(${k.person_id})">${esc(k.person_name)}</a> in <a class="link" onclick="openSource(${k.source_id})">${esc(k.source_name)}</a> at ${fmtT(k.first_start_s)}
-        <span class="prob ${probCls(k.probability, thr, a.confirm_threshold)}">${pct(k.probability)}</span> <span class="muted">(+${pct(k.margin)} over #2)</span>${k.status === "confirmed" ? '<span class="pill named">confirmed</span>' : ""}</div>
+      <div class="title"><a class="link" onclick="openPerson(${k.person_id})">${esc(k.person_name)}</a> in <a class="link" onclick="openSource(${k.source_id})">${esc(k.source_name)}</a> at ${fmtT(k.first_start_s)}${k.status === "confirmed" ? '<span class="pill named">confirmed</span>' : ""}</div>
+      <div class="scoreline"><span class="prob ${probCls(k.probability, thr, a.confirm_threshold)}">${pct(k.probability)}</span><span class="muted">+${pct(k.margin)} over #2</span></div>
       <div class="sub">speech ${fmtT(k.speech_seconds)} · quality ${Math.round(k.quality_score || 0)} · also heard in: ${heardIn(k.heard_in)}</div>
       ${clip(k.clip_url)}
       <div class="actions">${k.status === "confirmed" ? `<button class="small" onclick="unassign(${k.speaker_id})">Undo confirm</button>` : `<button class="small primary" onclick="confirmMatch(${k.match_id}, ${k.probability})">Confirm</button><button class="small" onclick="rejectMatch(${k.match_id})">Reject</button>`}
-        <button class="small" onclick="openSourceAt(${k.source_id}, ${k.first_start_s || 0})">▶ watch @ ${fmtT(k.first_start_s)}</button></div></div>`).join("") : `<p class="muted">Nothing yet. Add recordings in Library and identify people in People.</p>`;
+        <button class="small" onclick="openSourceAt(${k.source_id}, ${k.first_start_s || 0})">▶ watch @ ${fmtT(k.first_start_s)}</button></div></div>`).join("") : empty("Nothing to review yet. Add recordings in Library, then identify people in People.");
     $("#alerts-recurring").innerHTML = a.recurring_unknown.length ? a.recurring_unknown.slice(0, 10).map((r) => `<div class="item">
       <div class="title"><a class="link" onclick="openPerson(${r.person_id})">${esc(r.name)}</a> <span class="muted">· ${r.n_sources} recordings · ${fmtT(r.speech_seconds)}</span></div>
       ${heardInRich(r.heard_in.slice(0, 1))}
-      <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}"><button class="small" onclick="namePerson(${r.person_id})">Name</button></div></div>`).join("") : `<p class="muted">No unnamed voice has shown up twice yet.</p>`;
+      <div class="inline"><input placeholder="Name this voice" list="person-names" id="pn-${r.person_id}"><button class="small" onclick="namePerson(${r.person_id})">Name</button></div></div>`).join("") : empty("No unnamed voice has shown up twice yet.");
     const t = o.stats;
     $("#ov-tiles").innerHTML = [[t.hours.toFixed(1), "hours of recordings"], [t.recordings, "recordings"], [t.known, "known people"], [t.unknown, "unnamed voices"], [t.speech_hours.toFixed(1), "hours of attributed speech"], [t.open_alerts, "alerts to review"]]
       .map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
@@ -214,9 +217,10 @@ function drawMap(voices) {
   const pad = 28, maxS = Math.max(1, ...voices.map((v) => v.speech_seconds));
   const pts = voices.map((v) => ({ v, x: pad + ((v.x + 1) / 2) * (W - 2 * pad), y: pad + ((1 - v.y) / 2) * (H - 2 * pad), r: 4 + Math.sqrt(v.speech_seconds / maxS) * 14 }));
   cv._pts = pts;
-  for (const p of pts) { ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fillStyle = p.v.kind === "named" ? "#3987e5" : "#199e70"; ctx.globalAlpha = 0.85; ctx.fill(); ctx.globalAlpha = 1; ctx.lineWidth = 2; ctx.strokeStyle = "#171b21"; ctx.stroke(); }
-  ctx.fillStyle = "#e8ecf1"; ctx.font = "12px system-ui";
-  for (const p of pts.filter((p) => p.v.kind === "named").sort((a, b) => b.r - a.r).slice(0, 12)) ctx.fillText(p.v.name, p.x + p.r + 4, p.y + 4);
+  for (const p of pts) { const col = p.v.kind === "named" ? "#3987e5" : "#199e70"; const g = ctx.createRadialGradient(p.x, p.y, p.r * 0.2, p.x, p.y, p.r * 2.2); g.addColorStop(0, col + "55"); g.addColorStop(1, col + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fillStyle = col; ctx.globalAlpha = 0.92; ctx.fill(); ctx.globalAlpha = 1; ctx.lineWidth = 1.5; ctx.strokeStyle = "#131619"; ctx.stroke(); }
+  ctx.font = "500 12px Inter, system-ui"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(19,22,25,.9)"; ctx.fillStyle = "#ecebe6";
+  for (const p of pts.filter((p) => p.v.kind === "named").sort((a, b) => b.r - a.r).slice(0, 12)) { ctx.strokeText(p.v.name, p.x + p.r + 5, p.y + 4); ctx.fillText(p.v.name, p.x + p.r + 5, p.y + 4); }
 }
 $("#ov-map").addEventListener("mousemove", (e) => {
   const cv = e.target, pts = cv._pts || [], r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
@@ -234,6 +238,7 @@ async function loadLibrary() {
   loadNames();
   if (STATE.sourceId) { $("#lib-list").classList.add("hidden"); $("#lib-detail").classList.remove("hidden"); return loadSourceDetail(STATE.sourceId); }
   $("#lib-detail").classList.add("hidden"); $("#lib-detail").innerHTML = ""; YTP = null; $("#lib-list").classList.remove("hidden");
+  if (!$("#sources").innerHTML) $("#sources").innerHTML = skeleton(5);
   loadFeeds();
   try {
     const qs = encodeURIComponent($("#source-search").value.trim());
@@ -253,7 +258,7 @@ async function loadLibrary() {
       <td><span class="pill ${s.status}">${s.status}</span>${s.job && s.job.status === "running" ? ` <span class="muted">${Math.round(s.job.progress)}%</span>` : ""}</td>
       <td>${s.duration_s ? fmtT(s.duration_s) : ""}</td>
       <td class="sub">${(() => { const named = s.speakers.filter((sp) => sp.person_kind === "named"); const un = s.speakers.length - named.length; return named.slice(0, 8).map((sp) => `<span class="pill named">${esc(sp.person_name)}</span>`).join(" ") + (named.length > 8 ? ` <span class="muted">+${named.length - 8}</span>` : "") + (un ? ` <span class="muted">${un} unnamed</span>` : ""); })()}</td>
-      <td><button class="small danger" onclick="deleteSource(${s.id})">✕</button></td></tr>`).join("") + `</table>` : '<p class="muted">No recordings yet. Drop a file above.</p>';
+      <td><button class="small danger" onclick="deleteSource(${s.id})">✕</button></td></tr>`).join("") + `</table>` : empty("No recordings yet. Drop a file above, paste a link, or import a YouTube channel.");
     restoreScroll();
   } catch (e) { onErr(e); }
 }
@@ -275,6 +280,7 @@ async function loadSourceDetail(id) {
     el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.candidates.map((c) => c.status)])]);
     const openId = !$("#drawer").classList.contains("hidden") && STATE.src?.id === src.id ? Number(($("#drawer #nm-" ) || {}).id) : null;
     el.innerHTML = `<button class="back" onclick="back('library')">← Back</button><div class="card">${sourceView(src)}</div>`;
+    el.classList.add("tab");
     STATE.src = src;
     const cue = STATE.seekTo; STATE.seekTo = null;
     if (src.media_kind === "youtube") {
@@ -369,14 +375,14 @@ function candidateTable(sp, showAll = false) {
   const list = showAll ? sp.candidates : strong;
   const weakNote = !showAll && strong.length < sp.candidates.length ? `<div class="muted" style="font-size:12px;margin:4px 0">${strong.length ? "" : `No candidate above ${pct(minp)}: this is probably someone new. `}<a class="link" onclick="toggleWeak(${sp.id})">show ${sp.candidates.length - strong.length} weaker candidate(s)</a></div>` : "";
   if (!list.length) return weakNote;
-  return `<table><tr><th>#</th><th>Candidate</th><th>Probability</th><th>Margin</th><th>Heard in</th><th></th></tr>` +
+  return `<table class="cands"><tr><th>#</th><th>Candidate</th><th>Probability</th><th>Heard in</th><th></th></tr>` +
     list.map((c) => {
       const act = c.status === "confirmed" ? `<span class="pill named">confirmed</span> <button class="small" onclick="unassign(${sp.id})">undo</button>`
         : c.status === "rejected" ? `<span class="pill">rejected</span>`
         : `<button class="small primary" onclick="confirmMatch(${c.id}, ${c.probability})">Confirm</button> <button class="small" onclick="rejectMatch(${c.id})">Reject</button>`;
       return `<tr><td>${c.rank}</td><td><a class="link" onclick="openPerson(${c.person_id})">${esc(c.person_name)}</a><span class="pill ${c.person_kind}">${c.person_kind === "named" ? "known" : "unnamed"}</span>${sp.person_id === c.person_id ? '<span class="pill named">assigned</span>' : ""}</td>
-        <td><span class="prob ${probCls(c.probability, thr, hi)}">${pct(c.probability)}</span><div class="pbar"><i style="width:${pct(c.probability)}"></i></div></td>
-        <td>${c.rank === 1 ? "+" + pct(c.margin) : ""}</td><td class="sub">${heardIn(c.heard_in)}</td><td>${act}</td></tr>`;
+        <td><span class="prob ${probCls(c.probability, thr, hi)}">${pct(c.probability)}</span>${c.rank === 1 ? `<span class="margin">+${pct(c.margin)}</span>` : ""}<div class="pbar"><i style="width:${pct(c.probability)}"></i></div></td>
+        <td class="sub heard">${heardIn(c.heard_in)}</td><td class="act">${act}</td></tr>`;
     }).join("") + `</table>` + weakNote;
 }
 function toggleWeak(id) { const holder = $(`#cands-${id}`); const sp = (STATE.src?.speakers || []).concat(STATE.reviewItems || []).find((x) => x.id === id); if (!holder || !sp) return; holder.dataset.all = holder.dataset.all ? "" : "1"; holder.innerHTML = candidateTable(sp, !!holder.dataset.all); }
@@ -519,6 +525,7 @@ async function loadPeople() {
   $$("#people-seg button").forEach((b) => b.classList.toggle("active", b.dataset.view === STATE.peopleView));
   api("/api/stats").then((st) => { $$("#people-seg button")[0].textContent = `To review (${st.review_pending})`; }).catch(() => {});
   const q = $("#person-search").value.trim().toLowerCase(); const el = $("#people-content");
+  if (!el.innerHTML) el.innerHTML = skeleton(5);
   try {
     if (STATE.peopleView === "review") {
       const j = await api("/api/review?limit=40"); STATE.reviewItems = j.items; await loadNames();
@@ -530,12 +537,12 @@ async function loadPeople() {
           <div class="actions" style="margin:4px 0">${watchBtn(h)}${sp.clip_url ? clip(sp.clip_url) : ""}</div>
           <div id="cands-${sp.id}">${candidateTable(sp)}</div>
           <div class="inline" style="margin:6px 0"><input placeholder="Who is this? Type a name…" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id})"><button class="small primary" onclick="nameSpeaker(${sp.id})">Add</button><button class="small" onclick="setReview(${sp.id}, 'skipped')">Skip</button></div>
-          <textarea class="notes" placeholder="Notes about this voice" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea></div></div>`; }).join("") : `<p class="muted">Nothing to review. Upload a recording with the <b>Review</b> intent, or open a recording and press <b>Add voices to review queue</b>.</p>`;
+          <textarea class="notes" placeholder="Notes about this voice" onblur="saveSpeakerNotes(${sp.id}, this.value)">${esc(sp.notes || "")}</textarea></div></div>`; }).join("") : empty("Nothing to review. Upload a recording with the Review intent, or open a recording and press “Add voices to review queue”.");
     } else if (STATE.peopleView === "known") {
       const named = await loadNames();
       $$("#people-seg button")[1].textContent = `Known (${named.length})`;
       el.innerHTML = named.filter((p) => p.name.toLowerCase().includes(q)).map((p) => `<div class="item" style="display:flex;gap:10px;align-items:center">${glyphSvg(p.glyph)}<div style="flex:1"><a class="link" onclick="openPerson(${p.id})"><b>${esc(p.name)}</b></a>${bell(p)}
-        <div class="muted" style="font-size:12px">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints</div></div><button class="small" onclick="openPerson(${p.id})">Open</button></div>`).join("") || `<p class="muted">No known people yet. Name an unnamed voice, or identify someone from reference audio.</p>`;
+        <div class="muted" style="font-size:12px">${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech · ${p.n_prints} prints</div></div><button class="small" onclick="openPerson(${p.id})">Open</button></div>`).join("") || empty("No known people yet. Name an unnamed voice, or identify someone from reference audio.");
     } else if (STATE.peopleView === "unnamed") {
       const [u, named] = await Promise.all([api("/api/voices/unnamed"), loadNames()]);
       $$("#people-seg button")[2].textContent = `Unnamed voices (${u.voices.length})`;
@@ -544,7 +551,7 @@ async function loadPeople() {
         <div class="nm"><a class="link" onclick="openPerson(${v.id})">${esc(v.name)}</a>${bell(v)} <span class="muted">· ${v.n_sources} rec · ${fmtT(v.speech_seconds)}</span></div>
         ${heardInRich(v.heard_in.slice(0, 2))}
         <div class="inline"><input placeholder="Name" list="person-names" id="pn-${v.id}"><button class="small primary" onclick="namePerson(${v.id})">Name</button></div>
-        <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || `<p class="muted">No unnamed voices yet.</p>`;
+        <div class="inline"><button class="small" onclick="acceptPerson(${v.id})">Keep</button><select id="mg-${v.id}">${mergeOpts(v.id)}</select><button class="small" onclick="mergePerson(${v.id})">Merge</button><button class="small danger" onclick="deletePerson(${v.id})">Delete</button></div></div>`).join("") + `</div>` || empty("No unnamed voices yet. They appear as recordings are processed.");
     } else if (STATE.peopleView === "packages") {
       const j = await api("/api/groups"); ALLGROUPS = j.groups;
       $$("#people-seg button")[3].textContent = `Packages (${j.groups.length})`;
@@ -561,7 +568,7 @@ async function loadPeople() {
       $$("#people-seg button")[4].textContent = `Possible duplicates (${j.pairs.length})`;
       el.innerHTML = j.pairs.length ? `<p class="muted">Different mics or rooms can split one person into several entries. Listen to both, then merge.</p>` + j.pairs.map((p) => `<div class="item"><div class="title"><a class="link" onclick="openPerson(${p.a.id})">${esc(p.a.name)}</a><span class="pill ${p.a.kind}">${p.a.kind === "named" ? "known" : "unnamed"}</span> ≈ <a class="link" onclick="openPerson(${p.b.id})">${esc(p.b.name)}</a><span class="pill ${p.b.kind}">${p.b.kind === "named" ? "known" : "unnamed"}</span> <span class="prob hi">${pct(p.probability)}</span></div>
         <div class="row" style="margin:4px 0 0">${[p.a, p.b].map((x) => `<div class="col">${clip(x.heard_in[0]?.clip_url) || '<span class="muted">no clip</span>'}</div>`).join("")}</div>
-        <div class="actions"><button class="small primary" onclick="mergeInto(${p.a.kind === "named" ? p.b.id : p.a.id}, ${p.a.kind === "named" ? p.a.id : p.b.id})">Merge into ${esc(p.a.kind === "named" ? p.a.name : p.b.name)}</button>${p.a.kind !== "named" && p.b.kind !== "named" ? ` <button class="small" onclick="mergeInto(${p.b.id}, ${p.a.id})">Merge into ${esc(p.a.name)}</button>` : ""}</div></div>`).join("") : `<p class="muted">No likely duplicates right now.</p>`;
+        <div class="actions"><button class="small primary" onclick="mergeInto(${p.a.kind === "named" ? p.b.id : p.a.id}, ${p.a.kind === "named" ? p.a.id : p.b.id})">Merge into ${esc(p.a.kind === "named" ? p.a.name : p.b.name)}</button>${p.a.kind !== "named" && p.b.kind !== "named" ? ` <button class="small" onclick="mergeInto(${p.b.id}, ${p.a.id})">Merge into ${esc(p.a.name)}</button>` : ""}</div></div>`).join("") : empty("No likely duplicates right now.");
     }
   } catch (e) { onErr(e); }
 }
@@ -693,7 +700,7 @@ $("#btn-live").onclick = async () => {
       const raw = e.inputBuffer.getChannelData(0); const inp = new Float32Array(carry.length + raw.length); inp.set(carry); inp.set(raw, carry.length);
       const n = Math.floor(inp.length / ratio); const out = new Int16Array(n); let peak = 0;
       for (let i = 0; i < n; i++) { const a = i * ratio, b = (i + 1) * ratio; let acc = 0, cnt = 0; for (let j = Math.floor(a); j < Math.min(inp.length, Math.ceil(b)); j++) { acc += inp[j]; cnt++; } const v = Math.max(-1, Math.min(1, cnt ? acc / cnt : 0)); out[i] = v * 32767; peak = Math.max(peak, Math.abs(v)); }
-      carry = inp.slice(Math.floor(n * ratio)); $("#live-level").style.width = Math.min(100, peak * 140) + "%"; LIVE.sent += out.byteLength; ws.send(out.buffer);
+      carry = inp.slice(Math.floor(n * ratio)); const lv = Math.min(1, peak * 1.4); $("#live-level").style.width = lv * 100 + "%"; const ring = $("#live-ring"); if (ring) ring.style.strokeDashoffset = String(326.7 * (1 - lv)); LIVE.sent += out.byteLength; ws.send(out.buffer);
     };
     src.connect(proc); proc.connect(ac.destination);
     LIVE = { stream, ac, proc, ws, lastAlert: 0, log: [], frames: 0, sent: 0 };
@@ -709,7 +716,7 @@ $("#btn-live").onclick = async () => {
     $("#live-now").innerHTML = `<div class="warnbox"><b>Could not open the microphone:</b> ${esc(e.message)}.<br>${/not found/i.test(e.message) ? "No microphone is available to the browser: check Windows Settings → Privacy → Microphone (allow desktop apps and this browser), and that a mic is selected as default input." : /denied|permission/i.test(e.message) ? "Allow the microphone for this site (click the padlock/camera icon in the address bar) and press Start again." : "Close other apps using the mic (Zoom, Teams) and try again."}</div>`;
   }
 };
-function stopLive() { if (!LIVE) return; clearTimeout(LIVE.watchdog); try { LIVE.proc.disconnect(); LIVE.ac.close(); LIVE.stream.getTracks().forEach((t) => t.stop()); LIVE.ws.close(); } catch (e) {} LIVE = null; $("#btn-live").textContent = "▶ Start listening"; $("#live-level").style.width = "0"; $("#live-now").className = "livenow"; $("#live-now").innerHTML = '<div class="muted">Not listening.</div>'; }
+function stopLive() { if (!LIVE) return; clearTimeout(LIVE.watchdog); try { LIVE.proc.disconnect(); LIVE.ac.close(); LIVE.stream.getTracks().forEach((t) => t.stop()); LIVE.ws.close(); } catch (e) {} LIVE = null; $("#btn-live").textContent = "▶ Start listening"; $("#live-level").style.width = "0"; const ring = $("#live-ring"); if (ring) ring.style.strokeDashoffset = "326.7"; $("#live-now").className = "livenow"; $("#live-now").innerHTML = '<div class="muted">Not listening.</div>'; }
 function renderLive(m) {
   const now = $("#live-now"); const thr = Number(SETTINGS.match_threshold || 0.75);
   if (!m.speech) { now.className = "livenow"; now.innerHTML = `<div class="muted">${m.speech_s > 0 ? `listening… ${m.speech_s}s of speech buffered` : "silence"} · ${m.level_db} dBFS</div>`; return; }

@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VoiceFlock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪶</text></svg>">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f1114'/%3E%3Cpath d='M7 19v-6M12 23V9M17 21V11M22 24V8M27 18v-4' stroke='%23e8b35a' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
 <header>
-  <div class="brand"><span class="logo">🪶</span> VoiceFlock <span class="ver" id="ver"></span></div>
+  <div class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#1e2229"/><path d="M7 19v-6M12 23V9M17 21V11M22 24V8M27 18v-4" stroke="#e8b35a" stroke-width="2.6" stroke-linecap="round"/></svg> VoiceFlock <span class="ver" id="ver"></span></div>
   <nav id="tabs">
     <button data-tab="home">Home</button>
     <button data-tab="library">Library</button>
@@ -56,7 +57,7 @@
         <div class="card col">
           <h2>Add recordings</h2>
           <div class="inline" style="flex-wrap:wrap;margin-bottom:6px">
-            <select id="add-mode" style="flex:0 0 auto;max-width:420px">
+            <select id="add-mode" style="max-width:560px">
               <option value="bulk">Library: file every voice as background data (no labelling needed)</option>
               <option value="review">Review: I want to label the voices in this (adds them to the review queue)</option>
               <option value="match">Identify only: who is in this? (saves nothing)</option>
@@ -131,8 +132,9 @@
       <div class="card col narrow">
         <h2>Live listen</h2>
         <p class="muted">This device's microphone, scored against the whole library every second. Nothing is recorded or saved.</p>
-        <div class="actions"><button id="btn-live" class="primary">▶ Start listening</button></div>
-        <div class="level"><i id="live-level"></i></div>
+        <div class="ring"><svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="lv" id="live-ring" cx="60" cy="60" r="52" stroke-dasharray="326.7" stroke-dashoffset="326.7"/></svg><div class="mic">🎙</div></div>
+        <div class="actions" style="justify-content:center"><button id="btn-live" class="primary">▶ Start listening</button></div>
+        <div class="level hidden"><i id="live-level"></i></div>
         <div id="live-status" class="muted"></div>
         <label class="chk"><input type="checkbox" id="live-beep" checked> Beep on a known voice (flagged voices get their alarm + spoken line)</label>
         <label class="chk"><input type="checkbox" id="live-notify"> Browser notification</label>
