@@ -11,6 +11,11 @@ rem load .env into this process
 if exist ".env" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do if not "%%b"=="" set "%%a=%%b"
 if "%VOICEFLOCK_PORT%"=="" set VOICEFLOCK_PORT=8787
 if "%VOICEFLOCK_WORKERS%"=="" set VOICEFLOCK_WORKERS=1
+rem stop any VoiceFlock already holding the port (a stale instance from before an update, or one started at login)
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":%VOICEFLOCK_PORT% .*LISTENING"') do (
+  echo Stopping the VoiceFlock already running (PID %%p)...
+  taskkill /F /PID %%p >nul 2>&1
+)
 set VOICEFLOCK_SUPERVISED=1
 if not "%~1"=="--quiet" start "" /b cmd /c "timeout /t 4 >nul & start "" http://localhost:%VOICEFLOCK_PORT%"
 :loop
