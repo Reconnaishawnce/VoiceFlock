@@ -183,9 +183,20 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             return await call_next(request)
 
     # ---------------------------------------------------------------- helpers
+    VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v"}
+
+    def youtube_id(url: str | None) -> str | None:
+        if not url:
+            return None
+        m = re.search(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|embed/|live/|shorts/)|youtu\.be/)([\w-]{11})", url)
+        return m.group(1) if m else None
+
     def source_out(conn, s: dict) -> dict:
         s = dict(s)
         s["has_audio"] = bool(s.get("wav_path") and Path(s["wav_path"]).exists())
+        s["youtube_id"] = youtube_id(s.get("url"))
+        orig = Path(s["orig_path"]) if s.get("orig_path") else None
+        s["media_kind"] = "youtube" if s["youtube_id"] else ("video" if orig and orig.suffix.lower() in VIDEO_EXTS and orig.exists() else "audio")
         job = db.row(conn, "SELECT id, status, stage, progress, error FROM jobs WHERE source_id=? ORDER BY id DESC LIMIT 1",
                      (s["id"],))
         s["job"] = job
@@ -197,6 +208,9 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         sp["clip_url"] = f"/clips/{sp['clip_path']}" if sp.get("clip_path") else None
         sp["segments"] = db.rows(conn, "SELECT start_s, end_s FROM segments WHERE source_speaker_id=? ORDER BY start_s",
                                  (sp["id"],))
+        if sp["segments"]:
+            lg = max(sp["segments"], key=lambda g: g["end_s"] - g["start_s"])
+            sp["longest"] = {"start_s": lg["start_s"], "seconds": round(lg["end_s"] - lg["start_s"], 1)}
         sp["candidates"] = db.rows(conn,
             "SELECT m.*, p.name AS person_name, p.kind AS person_kind FROM matches m JOIN persons p ON p.id=m.person_id"
             " WHERE m.source_speaker_id=? ORDER BY m.rank", (sp["id"],))
@@ -496,6 +510,20 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         p = s["wav_path"] if s["wav_path"] and Path(s["wav_path"]).exists() else s["orig_path"]
         if not p or not Path(p).exists():
             raise HTTPException(404, "audio file missing")
+        return FileResponse(p)
+
+    @app.get("/api/sources/{sid}/media")
+    def source_media(sid: int, conn=Depends(get_conn)):
+        """The original upload when it is a browser-playable video, else the wav (for the synced player)."""
+        s = db.row(conn, "SELECT wav_path, orig_path FROM sources WHERE id=?", (sid,))
+        if not s:
+            raise HTTPException(404)
+        orig = Path(s["orig_path"]) if s["orig_path"] else None
+        if orig and orig.exists() and orig.suffix.lower() in VIDEO_EXTS:
+            return FileResponse(str(orig))
+        p = s["wav_path"] if s["wav_path"] and Path(s["wav_path"]).exists() else (str(orig) if orig and orig.exists() else None)
+        if not p:
+            raise HTTPException(404, "media file missing")
         return FileResponse(p)
 
     @app.post("/api/sources/{sid}/reprocess")
@@ -968,7 +996,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                             headers={"Content-Disposition": f"attachment; filename=voiceflock-library-{__import__('time').strftime('%Y%m%d')}.json"})
         return data
 
-    @app.get("/api/mobile/model.onnx")
+    @app.api_route("/api/mobile/model.onnx", methods=["GET", "HEAD"])
     def mobile_model(conn=Depends(get_conn)):
         p = onnx_export.model_path()
         if not p.exists():

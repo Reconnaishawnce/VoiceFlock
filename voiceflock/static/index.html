@@ -11,12 +11,10 @@
 <header>
   <div class="brand"><span class="logo">🪶</span> VoiceFlock <span class="ver" id="ver"></span></div>
   <nav id="tabs">
-    <button data-tab="overview">Overview</button>
-    <button data-tab="bulk">Bulk Scan</button>
-    <button data-tab="build">Build Database</button>
-    <button data-tab="match">VoiceFlock Match</button>
+    <button data-tab="home">Home</button>
+    <button data-tab="library">Library</button>
+    <button data-tab="people">People</button>
     <button data-tab="live">Live</button>
-    <button data-tab="sources">Sources &amp; Queue</button>
     <button data-tab="settings">Settings</button>
   </nav>
   <div class="stats" id="stats"></div>
@@ -24,126 +22,105 @@
 <div id="banner" class="banner hidden"></div>
 
 <main>
-  <!-- ======================= OVERVIEW ======================= -->
-  <section id="tab-overview" class="tab hidden">
+  <!-- ======================= HOME ======================= -->
+  <section id="tab-home" class="tab hidden">
     <div class="tiles" id="ov-tiles"></div>
     <div class="row">
       <div class="card col">
-        <div class="hdr"><h2>Voice map</h2><span class="muted" id="ov-map-hint">every voice in the library, placed by similarity · size = speaking time · click to open</span></div>
-        <div class="legend"><span><i style="background:var(--s1)"></i>known person</span><span><i style="background:var(--s3)"></i>unnamed voice</span></div>
-        <div class="mapwrap"><canvas id="ov-map" height="420"></canvas><div id="ov-tip" class="tip hidden"></div></div>
-      </div>
-      <div class="card col narrow">
-        <h2>Most heard</h2>
-        <div id="ov-top"></div>
-      </div>
-    </div>
-    <div class="row">
-      <div class="card col">
-        <h2>Recordings over time</h2>
-        <div id="ov-activity"></div>
-      </div>
-      <div class="card col narrow">
-        <h2>Heard together</h2>
-        <p class="muted">Pairs of voices that share the most recordings.</p>
-        <div id="ov-pairs"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ======================= BULK ======================= -->
-  <section id="tab-bulk" class="tab">
-    <div class="row">
-      <div class="card col">
-        <h2>Bulk scan: build the background library</h2>
-        <p class="muted">Drop many files or paste URLs and walk away. Every speaker is voiceprinted and filed automatically:
-          known people raise an alert, everyone else is stored as an unnamed voice. Nothing asks you to name anything.
-          Later, under <b>Build Database</b>, you identify people by uploading reference audio or by naming the voices you recognise.</p>
-        <div class="dropzone" id="drop-bulk">Drop audio/video files here or <label class="link">browse<input type="file" multiple hidden id="file-bulk"></label></div>
-        <div class="urlrow"><input id="url-bulk" placeholder="https://… (YouTube, podcast episode, direct link)"><button id="btn-url-bulk">Queue URL</button></div>
-        <label class="chk"><input type="checkbox" id="inc-bulk"> Incognito: match only, don't save any voices from these files</label>
-        <div id="upl-bulk" class="uploads"></div>
-      </div>
-      <div class="card col">
-        <h2>Import a YouTube channel or playlist</h2>
-        <p class="muted">Lists the videos without downloading. Filter, tick what you want, queue. Downloads run one at a time behind your own uploads.</p>
-        <div class="urlrow"><input id="yt-url" placeholder="https://www.youtube.com/@CityOfExample  ·  playlist URL  ·  channel/videos URL"><button id="btn-yt-list" class="primary">List videos</button></div>
-        <div class="inline" style="flex-wrap:wrap">
-          <input id="yt-filter" placeholder="title filter (regex), e.g. council|hearing" style="flex:2 1 200px">
-          <input id="yt-min" type="number" placeholder="min min" title="minimum minutes" style="flex:0 0 90px">
-          <input id="yt-max" type="number" placeholder="max min" title="maximum minutes" style="flex:0 0 90px">
-          <input id="yt-from" type="date" title="from date (when the listing has dates)" style="flex:0 0 150px">
-          <input id="yt-limit" type="number" value="300" title="how many entries to fetch from the channel" style="flex:0 0 90px">
-        </div>
-        <label class="chk"><input type="checkbox" id="yt-prefix" checked> Prefix recording names with the channel title</label>
-        <div id="yt-results"></div>
-      </div>
-      <div class="card col narrow">
-        <h2>Watched feeds <span class="muted" id="feeds-count"></span></h2>
-        <p class="muted">Podcast RSS or a YouTube channel feed. New episodes are downloaded and scanned automatically.</p>
-        <input id="feed-url" placeholder="https://feeds.example.com/podcast.xml">
-        <div class="inline"><select id="feed-mode" style="max-width:120px"><option value="bulk">bulk scan</option><option value="match">match only</option></select>
-          <input id="feed-interval" type="number" min="5" value="60" title="poll interval (minutes)" style="max-width:90px"> <span class="muted" style="align-self:center">min</span>
-          <input id="feed-backfill" type="number" min="0" value="3" title="existing episodes to grab now" style="max-width:70px"> <span class="muted" style="align-self:center">back</span>
-          <button class="primary" id="btn-add-feed">Watch</button></div>
-        <label class="chk"><input type="checkbox" id="feed-incognito"> Incognito feed</label>
-        <div id="feeds"></div>
-      </div>
-    </div>
-    <div class="row">
-      <div class="card col">
-        <h2>Alerts: known voices spotted</h2>
-        <p class="muted" id="alert-hint"></p>
+        <h2>Known voices spotted <span class="muted" id="alert-hint"></span></h2>
         <div id="alerts-known"></div>
       </div>
-      <div class="card col">
-        <h2>Unnamed voices that keep showing up</h2>
+      <div class="card col narrow">
+        <h2>Unnamed voices heard repeatedly</h2>
         <div id="alerts-recurring"></div>
       </div>
     </div>
-  </section>
-
-  <!-- ======================= BUILD ======================= -->
-  <section id="tab-build" class="tab hidden">
     <div class="row">
-      <div class="card col narrow">
-        <h2>Identify someone</h2>
-        <p class="muted">Type a name and drop reference audio of that person (an interview, a speech, a voicemail). The dominant speaker is enrolled under the name, and every recording already in the library is re-checked for them within seconds.</p>
-        <input id="enroll-name" placeholder="Person name" list="person-names">
-        <datalist id="person-names"></datalist>
-        <div class="dropzone small" id="drop-enroll">Drop clip(s) or <label class="link">browse<input type="file" multiple hidden id="file-enroll"></label></div>
-        <div class="urlrow"><input id="url-enroll" placeholder="or a URL"><button id="btn-url-enroll">Queue</button></div>
-        <div id="upl-enroll" class="uploads"></div>
-        <h2>People</h2>
-        <input id="person-search" placeholder="search…">
-        <div id="people"></div>
-      </div>
       <div class="card col">
-        <div id="merge-suggestions"></div>
-        <h2>Unnamed voices <span class="muted" id="unnamed-count"></span></h2>
-        <p class="muted">Background data, sorted by how often each voice shows up. Name a voice if you know it; <b>Keep</b> it to track it as a known voice without a name (it will raise alerts like a named person); <b>Merge</b> duplicates.</p>
-        <div id="unnamed"></div>
+        <div class="hdr"><h2>Voice map</h2><span class="muted">placed by similarity · size = speaking time · click to open</span></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>known</span><span><i style="background:var(--s3)"></i>unnamed</span></div>
+        <div class="mapwrap"><canvas id="ov-map" height="380"></canvas><div id="ov-tip" class="tip hidden"></div></div>
       </div>
+      <div class="card col narrow"><h2>Most heard</h2><div id="ov-top"></div></div>
     </div>
-    <div id="person-detail" class="card hidden"></div>
+    <div class="row">
+      <div class="card col"><h2>Hours added per day</h2><div id="ov-activity"></div></div>
+      <div class="card col narrow"><h2>Heard together</h2><div id="ov-pairs"></div></div>
+    </div>
   </section>
 
-  <!-- ======================= MATCH ======================= -->
-  <section id="tab-match" class="tab hidden">
-    <div class="row">
-      <div class="card col narrow">
-        <h2>VoiceFlock Match</h2>
-        <p class="muted">Upload a recording and see who it sounds like: top candidates with calibrated probability, margin over #2 and clip quality.</p>
-        <div class="dropzone" id="drop-match">Drop a file or <label class="link">browse<input type="file" multiple hidden id="file-match"></label></div>
-        <div class="actions"><button id="btn-rec">🎙 Record from microphone</button> <span id="rec-status" class="muted"></span></div>
-        <div class="urlrow"><input id="url-match" placeholder="or a URL"><button id="btn-url-match">Queue</button></div>
-        <label class="chk"><input type="checkbox" id="inc-match"> Incognito (don't save voices from this file)</label>
-        <div id="upl-match" class="uploads"></div>
-        <h3>Recent</h3>
-        <div id="match-recent"></div>
+  <!-- ======================= LIBRARY ======================= -->
+  <section id="tab-library" class="tab hidden">
+    <div id="lib-list">
+      <div class="row">
+        <div class="card col">
+          <h2>Add recordings</h2>
+          <div class="inline" style="flex-wrap:wrap;margin-bottom:6px">
+            <select id="add-mode" style="flex:0 0 auto;max-width:340px">
+              <option value="bulk">Add to library: file every voice, alert on known ones</option>
+              <option value="match">Identify only: who is in this? (saves nothing)</option>
+              <option value="enroll">Enroll: this is reference audio of one person</option>
+            </select>
+            <input id="enroll-name" placeholder="Person's name" list="person-names" class="hidden" style="flex:1 1 200px">
+            <datalist id="person-names"></datalist>
+          </div>
+          <div class="dropzone" id="drop-main">Drop audio or video files here, or <label class="link">browse<input type="file" multiple hidden id="file-main"></label></div>
+          <div class="urlrow"><input id="url-main" placeholder="or paste a URL: YouTube video, podcast episode, direct link"><button id="btn-url-main">Queue URL</button><button id="btn-rec" title="Record with this device's microphone">🎙</button></div>
+          <div id="rec-status" class="muted"></div>
+          <div id="upl-main" class="uploads"></div>
+          <details><summary>Import a YouTube channel or playlist</summary>
+            <p class="muted">Lists the videos without downloading. Filter, tick what you want, queue.</p>
+            <div class="urlrow"><input id="yt-url" placeholder="https://www.youtube.com/@Channel · playlist URL"><button id="btn-yt-list" class="primary">List videos</button></div>
+            <div class="inline" style="flex-wrap:wrap">
+              <input id="yt-filter" placeholder="title filter (regex), e.g. council|hearing" style="flex:2 1 200px">
+              <input id="yt-min" type="number" placeholder="min min" style="flex:0 0 90px"><input id="yt-max" type="number" placeholder="max min" style="flex:0 0 90px">
+              <input id="yt-from" type="date" style="flex:0 0 150px"><input id="yt-limit" type="number" value="300" title="entries to fetch" style="flex:0 0 90px">
+            </div>
+            <label class="chk"><input type="checkbox" id="yt-prefix" checked> Prefix names with the channel title</label>
+            <div id="yt-results"></div>
+          </details>
+          <details><summary>Watched feeds <span class="muted" id="feeds-count"></span></summary>
+            <p class="muted">Podcast RSS or a YouTube channel feed. New episodes are downloaded and scanned automatically.</p>
+            <input id="feed-url" placeholder="https://feeds.example.com/podcast.xml">
+            <div class="inline" style="flex-wrap:wrap"><select id="feed-mode" style="max-width:140px"><option value="bulk">add to library</option><option value="match">identify only</option></select>
+              <input id="feed-interval" type="number" min="5" value="60" style="max-width:90px"> <span class="muted" style="align-self:center">min</span>
+              <input id="feed-backfill" type="number" min="0" value="3" style="max-width:70px"> <span class="muted" style="align-self:center">back</span>
+              <button class="primary" id="btn-add-feed">Watch</button></div>
+            <div id="feeds"></div>
+          </details>
+        </div>
       </div>
-      <div class="card col" id="match-result"><p class="muted">Results appear here.</p></div>
+      <div class="card">
+        <div class="hdr"><h2>Recordings</h2>
+          <div class="actions" style="margin:0"><input id="source-search" placeholder="search name / URL / person" style="max-width:260px">
+            <button class="small" id="btn-rematch" title="Re-score every recording against the current people (fast)">Re-match all</button>
+            <a class="link" href="/api/export/matches.csv">Export CSV</a></div></div>
+        <div id="jobs"></div>
+        <div id="sources"></div>
+      </div>
     </div>
+    <div id="lib-detail" class="hidden"></div>
+  </section>
+
+  <!-- ======================= PEOPLE ======================= -->
+  <section id="tab-people" class="tab hidden">
+    <div id="people-list">
+      <div class="card">
+        <div class="hdr">
+          <div class="seg" id="people-seg"><button data-view="known">Known</button><button data-view="unnamed">Unnamed voices</button><button data-view="dups">Possible duplicates</button></div>
+          <div class="actions" style="margin:0"><input id="person-search" placeholder="search…" style="max-width:220px"><button class="small" id="btn-new-person">+ Identify someone</button></div>
+        </div>
+        <details id="identify-box"><summary>Identify someone from reference audio</summary>
+          <p class="muted">Type a name and drop audio where that person does most of the talking (an interview, a floor speech, a voicemail). The dominant speaker is enrolled under the name and every recording in the library is re-checked for them.</p>
+          <div class="inline"><input id="identify-name" placeholder="Person's name" list="person-names"></div>
+          <div class="dropzone small" id="drop-enroll">Drop clip(s) or <label class="link">browse<input type="file" multiple hidden id="file-enroll"></label></div>
+          <div class="urlrow"><input id="url-enroll" placeholder="or a URL"><button id="btn-url-enroll">Queue</button></div>
+          <div id="upl-enroll" class="uploads"></div>
+        </details>
+        <div id="people-content"></div>
+      </div>
+    </div>
+    <div id="people-detail" class="hidden"></div>
   </section>
 
   <!-- ======================= LIVE ======================= -->
@@ -151,14 +128,14 @@
     <div class="row">
       <div class="card col narrow">
         <h2>Live listen</h2>
-        <p class="muted">Uses this device's microphone. Every second the last few seconds of audio are voiceprinted and compared with the whole library, on this machine, nothing is recorded or saved.</p>
+        <p class="muted">This device's microphone, scored against the whole library every second. Nothing is recorded or saved.</p>
         <div class="actions"><button id="btn-live" class="primary">▶ Start listening</button></div>
         <div class="level"><i id="live-level"></i></div>
         <div id="live-status" class="muted"></div>
-        <label class="chk"><input type="checkbox" id="live-beep" checked> Beep on a known voice (flagged voices get their alarm + spoken message)</label>
+        <label class="chk"><input type="checkbox" id="live-beep" checked> Beep on a known voice (flagged voices get their alarm + spoken line)</label>
+        <label class="chk"><input type="checkbox" id="live-notify"> Browser notification</label>
         <div class="actions"><button class="small" onclick="runAlert('Nancy Pelosi', null, null)">▶ Test alarm + voice</button></div>
-        <label class="chk"><input type="checkbox" id="live-notify"> Browser notification on a known voice</label>
-        <p class="muted" style="font-size:12px">Browser rule: the microphone works on the laptop itself (localhost) or over HTTPS, e.g. a Tailscale HTTPS address, not plain http://ip from a phone.</p>
+        <p class="muted" style="font-size:12px">Browser rule: the microphone works on the laptop itself (localhost) or over HTTPS, not plain http://ip from a phone.</p>
       </div>
       <div class="card col">
         <div id="live-now" class="livenow"><div class="muted">Not listening.</div></div>
@@ -168,48 +145,29 @@
     </div>
   </section>
 
-  <!-- ======================= SOURCES ======================= -->
-  <section id="tab-sources" class="tab hidden">
-    <div class="row">
-      <div class="card col narrow">
-        <div class="hdr"><h2>Queue</h2><button class="small" id="btn-clear-jobs">Clear finished</button></div>
-        <div id="jobs"></div>
-      </div>
-      <div class="card col">
-        <div class="hdr"><h2>Sources</h2>
-          <div class="actions" style="margin:0"><input id="source-search" placeholder="search name / URL / person" style="max-width:260px">
-            <button class="small" id="btn-rematch" title="Re-score every recording against the current gallery (fast, no ML)">Re-match all</button>
-            <a class="link" href="/api/export/matches.csv">Export matches CSV</a></div></div>
-        <div id="sources"></div>
-      </div>
-    </div>
-    <div id="source-detail" class="card hidden"></div>
-  </section>
-
   <!-- ======================= SETTINGS ======================= -->
   <section id="tab-settings" class="tab hidden">
     <div class="card">
-      <h2>Settings</h2>
-      <form id="settings-form"></form>
-      <div class="actions"><button id="btn-save-settings" class="primary">Save</button> <span id="settings-msg" class="muted"></span></div>
-      <h3>Model self-test</h3>
-      <p class="muted">Loads both models and runs them on 8 s of synthetic audio. Run this once after setting the token; the first run downloads the models.</p>
-      <div class="actions"><button id="btn-selftest">Run self-test</button> <span id="selftest-status" class="muted"></span></div>
-      <pre id="selftest-result" class="muted"></pre>
-      <h3>Phone app</h3>
-      <p class="muted">The Android app listens offline and alerts when a <b>flagged</b> voice (🔔 on a person) is heard. Install it with Obtainium from <code>github.com/Reconnaishawnce/VoiceFlock</code>.</p>
-      <p><b>Simplest:</b> <a class="link" href="/api/mobile/gallery.json?download=true">Download phone library (.json)</a>, send it to the phone (WhatsApp, email, Drive) and open it with VoiceFlock. The phone fetches the 85 MB speaker model from GitHub by itself. Re-send the file whenever you flag or name voices.</p>
-      <p class="muted">Or sync directly over Wi-Fi/Tailscale: in the app's Settings enter one of these addresses and press Sync.</p>
-      <pre id="phone-info" class="muted"></pre>
-      <div class="actions"><button id="btn-export-model">Prepare phone model now</button> <span id="model-status" class="muted"></span></div>
-      <h3>Backup &amp; transfer</h3>
-      <p class="muted">The whole app lives in the <code>data</code> folder. For moving voices between machines: <a class="link" href="/api/export/gallery.json">export gallery JSON</a>
-        or import one: <label class="link">choose file<input type="file" id="import-gallery" accept="application/json" hidden></label> <span id="import-msg" class="muted"></span></p>
-      <p class="muted">Set <code>VOICEFLOCK_PASSWORD</code> in <code>.env</code> to require a password when the server is reachable from other devices.</p>
-      <h3>Calibration &amp; evaluation</h3>
-      <p class="muted">Run from the command line (see README): <code>voiceflock calibrate &lt;folder&gt;</code> fits the probability calibration and
-        cohort from labelled clips; <code>voiceflock evaluate &lt;folder&gt;</code> reports rank-1 accuracy, EER, DET curve and miss rate at 1% false alarm.</p>
-      <pre id="calib-info" class="muted"></pre>
+      <details open><summary><b>Phone app</b></summary>
+        <p class="muted">Listens offline and performs the alert when a <b>flagged</b> voice (🔔 on a person) is heard. Install with Obtainium from <code>github.com/Reconnaishawnce/VoiceFlock</code>.</p>
+        <p><b>Simplest:</b> <a class="link" href="/api/mobile/gallery.json?download=true">Download phone library (.json)</a>, send it to the phone (WhatsApp, email, Drive), open it with VoiceFlock. The phone fetches the speaker model from GitHub itself. Re-send the file whenever you flag or name voices.</p>
+        <pre id="phone-info" class="muted"></pre>
+        <div class="actions"><button id="btn-export-model" class="small">Prepare phone model on this laptop</button> <span id="model-status" class="muted"></span></div>
+      </details>
+      <details open><summary><b>Settings</b></summary>
+        <form id="settings-form"></form>
+        <div class="actions"><button id="btn-save-settings" class="primary">Save</button> <span id="settings-msg" class="muted"></span></div>
+      </details>
+      <details><summary><b>Model self-test</b></summary>
+        <p class="muted">Loads both models on 8 s of synthetic audio. Run once after setting the token.</p>
+        <div class="actions"><button id="btn-selftest">Run self-test</button> <span id="selftest-status" class="muted"></span></div>
+        <pre id="selftest-result" class="muted"></pre>
+      </details>
+      <details><summary><b>Backup, transfer, calibration</b></summary>
+        <p class="muted">Everything lives in the <code>data</code> folder. <a class="link" href="/api/export/gallery.json">Export gallery JSON</a> or import one: <label class="link">choose file<input type="file" id="import-gallery" accept="application/json" hidden></label> <span id="import-msg" class="muted"></span></p>
+        <p class="muted">Command line: <code>voiceflock calibrate &lt;folder&gt;</code> fits probability calibration from labelled clips; <code>voiceflock evaluate &lt;folder&gt;</code> reports rank-1 accuracy, EER, DET curve and miss rate at 1% false alarm.</p>
+        <pre id="calib-info" class="muted"></pre>
+      </details>
     </div>
   </section>
 </main>

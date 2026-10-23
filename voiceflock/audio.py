@@ -223,10 +223,18 @@ def write_clip_concat(wav: np.ndarray, segments: list[tuple[float, float]], max_
         total += take
     chosen.sort()
     parts = []
-    gap = np.zeros(int(0.15 * SR), dtype=np.float32)
+    gap = np.zeros(int(0.12 * SR), dtype=np.float32)
+    fade = int(0.02 * SR)
+    ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
     for s, e in chosen:
-        parts.append(wav[int(s * SR):int(e * SR)])
+        piece = wav[int(s * SR):int(e * SR)].copy()
+        if len(piece) > 2 * fade:  # 20 ms fades so joins don't click
+            piece[:fade] *= ramp
+            piece[-fade:] *= ramp[::-1]
+        parts.append(piece)
         parts.append(gap)
+    if parts:
+        parts.pop()  # no trailing gap
     seg = np.concatenate(parts) if parts else np.zeros(SR // 10, dtype=np.float32)
     peak = float(np.abs(seg).max()) if seg.size else 0.0
     if peak > 0:

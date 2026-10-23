@@ -12,6 +12,11 @@ Three ways to use it, plus feed watching so new episodes scan themselves:
 
 | Mode | What it does |
 |---|---|
+The web UI has five tabs: **Home** (alerts, stats, voice map), **Library** (add recordings, YouTube channel
+import, feeds, every recording with a synced video/audio player and speaker timeline), **People** (known,
+unnamed, possible duplicates; each person has a profile with every recording they were heard in), **Live**
+and **Settings**. Below, "Bulk Scan", "Build Database" and "Match" describe the three ways of using it.
+
 | **Bulk Scan** | Drop many files. Every speaker is printed. Known people raise an alert ("we think *X* is in this file at 12:34, check against *that* file"). New voices are saved as *unnamed voices*, so if the same voice shows up in a later upload you're told where it was first heard. |
 | **Build Database** | Listen to the unnamed voices, name them, merge duplicates, or enroll a known person directly from a clip. |
 | **Live** | The laptop microphone, scored against the whole library every second: "who is speaking right now", with a beep or browser notification when a known voice is heard. Nothing is recorded. |
@@ -129,6 +134,10 @@ one-click merge.
 
 **Microphone.** VoiceFlock Match has a Record button (browser rule: works on the laptop itself or over HTTPS,
 e.g. Tailscale; plain http://ip from a phone can't open the mic).
+
+**Seeing who is talking.** A YouTube recording embeds the video; an uploaded video file plays the original;
+audio plays the converted wav. Clicking a block on the timeline, a timestamp chip, or *▶ watch longest turn*
+jumps the player there, so naming 25 senators from a hearing is a matter of reading the on-screen caption.
 
 **Timeline.** Each recording shows a colour-coded speaker timeline; click any block or timestamp chip to
 jump the player there, so "check at 12:34" is one click.
