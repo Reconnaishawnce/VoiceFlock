@@ -2,6 +2,12 @@
 rem Starts the VoiceFlock server and opens the UI. Close this window to stop the server.
 rem Usage: VoiceFlock.bat [--quiet]   (--quiet = don't open the browser; used by the login shortcut)
 cd /d "%~dp0"
+rem keep this window open whatever happens, so errors stay readable (relaunch inside a persistent cmd)
+if defined VF_KEEP_OPEN goto :run
+set "VF_KEEP_OPEN=1"
+cmd /k call "%~f0" %*
+exit /b
+:run
 if not exist ".venv\Scripts\python.exe" (
   echo VoiceFlock is not set up yet. Right-click setup.ps1 and choose "Run with PowerShell".
   pause
@@ -13,7 +19,7 @@ if "%VOICEFLOCK_PORT%"=="" set VOICEFLOCK_PORT=8787
 if "%VOICEFLOCK_WORKERS%"=="" set VOICEFLOCK_WORKERS=1
 rem stop any VoiceFlock already holding the port (a stale instance from before an update, or one started at login)
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":%VOICEFLOCK_PORT% .*LISTENING"') do (
-  echo Stopping the VoiceFlock already running (PID %%p)...
+  echo Stopping the VoiceFlock already running, PID %%p ...
   taskkill /F /PID %%p >nul 2>&1
 )
 set VOICEFLOCK_SUPERVISED=1

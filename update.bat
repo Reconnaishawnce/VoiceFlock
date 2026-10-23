@@ -2,11 +2,17 @@
 rem Updates VoiceFlock (and yt-dlp, which YouTube breaks regularly). Close VoiceFlock first, then start VoiceFlock.bat again.
 rem Tip: with VoiceFlock running you can instead use Settings -> Update and restart in the web UI.
 cd /d "%~dp0"
+rem keep this window open whatever happens, so errors stay readable (relaunch inside a persistent cmd)
+if defined VF_KEEP_OPEN goto :run
+set "VF_KEEP_OPEN=1"
+cmd /k call "%~f0" %*
+exit /b
+:run
 if exist ".env" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do if not "%%b"=="" set "%%a=%%b"
 if "%VOICEFLOCK_PORT%"=="" set VOICEFLOCK_PORT=8787
 rem stop any VoiceFlock already holding the port (a stale instance from before an update, or one started at login)
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":%VOICEFLOCK_PORT% .*LISTENING"') do (
-  echo Stopping the VoiceFlock already running (PID %%p)...
+  echo Stopping the VoiceFlock already running, PID %%p ...
   taskkill /F /PID %%p >nul 2>&1
 )
 set "HERE=%CD:\=/%"
