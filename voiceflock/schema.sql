@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS persons (
   name TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'provisional',
   alert INTEGER NOT NULL DEFAULT 0,          -- 1 = alert me when this voice is heard (Live / phone)
+  alert_sound TEXT,                          -- siren | klaxon | chime | none | NULL = default
+  alert_message TEXT,                        -- spoken on alert; [NAME] is replaced; NULL = default template
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT

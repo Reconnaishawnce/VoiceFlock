@@ -155,7 +155,8 @@
         <div class="actions"><button id="btn-live" class="primary">▶ Start listening</button></div>
         <div class="level"><i id="live-level"></i></div>
         <div id="live-status" class="muted"></div>
-        <label class="chk"><input type="checkbox" id="live-beep" checked> Beep on a known voice</label>
+        <label class="chk"><input type="checkbox" id="live-beep" checked> Beep on a known voice (flagged voices get their alarm + spoken message)</label>
+        <div class="actions"><button class="small" onclick="runAlert('Nancy Pelosi', null, null)">▶ Test alarm + voice</button></div>
         <label class="chk"><input type="checkbox" id="live-notify"> Browser notification on a known voice</label>
         <p class="muted" style="font-size:12px">Browser rule: the microphone works on the laptop itself (localhost) or over HTTPS, e.g. a Tailscale HTTPS address, not plain http://ip from a phone.</p>
       </div>

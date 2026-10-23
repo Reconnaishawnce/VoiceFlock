@@ -38,6 +38,15 @@ class PersonPatch(BaseModel):
     name: str | None = None
     notes: str | None = None
     alert: bool | None = None
+    alert_sound: str | None = None      # siren | klaxon | chime | none | "" (= default)
+    alert_message: str | None = None    # "" = default template
+
+
+ALERT_SOUNDS = ("siren", "klaxon", "chime", "none")
+
+
+def render_alert_message(template: str, name: str) -> str:
+    return (template or "").replace("[NAME]", name).replace("{name}", name).strip()
 
 
 class YtListIn(BaseModel):
@@ -224,6 +233,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                                            (p["id"],)).fetchone()[0]
         p["heard_in"] = person_sources(conn, p["id"], limit=50)
         p["glyph"] = person_glyph(conn, p["id"])
+        p["spoken"] = render_alert_message(p.get("alert_message") or config.Settings(conn)["alert_default_message"], p["name"])
         return p
 
     def person_mean(conn, person_id: int):
@@ -648,6 +658,13 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 conn.execute("UPDATE persons SET notes=? WHERE id=?", (body.notes, pid))
             if body.alert is not None:
                 conn.execute("UPDATE persons SET alert=? WHERE id=?", (int(body.alert), pid))
+            if body.alert_sound is not None:
+                snd = body.alert_sound.strip().lower()
+                if snd and snd not in ALERT_SOUNDS:
+                    raise HTTPException(400, f"alert_sound must be one of {ALERT_SOUNDS}")
+                conn.execute("UPDATE persons SET alert_sound=? WHERE id=?", (snd or None, pid))
+            if body.alert_message is not None:
+                conn.execute("UPDATE persons SET alert_message=? WHERE id=?", (body.alert_message.strip() or None, pid))
             db.bump_prints_version(conn)
         return person_out(conn, db.row(conn, "SELECT * FROM persons WHERE id=?", (pid,)))
 
@@ -930,17 +947,21 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         settings = config.Settings(conn)
         cal = gallery.load_calibrations(conn, settings)["raw"]
         people = []
-        for p in db.rows(conn, "SELECT id, name, kind, alert FROM persons"):
+        for p in db.rows(conn, "SELECT id, name, kind, alert, alert_sound, alert_message FROM persons"):
             rows = conn.execute("SELECT embedding FROM prints WHERE person_id=? ORDER BY is_mean DESC, COALESCE(quality,0) DESC LIMIT ?",
                                 (p["id"], max_prints)).fetchall()
             if not rows:
                 continue
             prints = [base64.b64encode(db.emb_to_blob(gallery.l2n(db.blob_to_emb(r["embedding"])))).decode() for r in rows]
-            people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]), "prints": prints})
+            people.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "alert": bool(p["alert"]),
+                           "alert_sound": p["alert_sound"], "alert_message": p["alert_message"],
+                           "spoken": render_alert_message(p["alert_message"] or settings["alert_default_message"], p["name"]),
+                           "prints": prints})
         data = {"format": "voiceflock-mobile", "version": 1, "generated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
                 "dim": config.EMBED_DIM, "sample_rate": 16000, "match_threshold": float(settings["match_threshold"]),
                 "calibration": {"a": cal.a, "b": cal.b}, "window_s": float(settings["live_window_s"]), "hop_s": float(settings["live_hop_s"]),
                 "min_level_db": float(settings["live_min_level_db"]), "model": onnx_export.MODEL_FILE, "model_meta": onnx_export.meta(),
+                "alert_defaults": {"message": settings["alert_default_message"], "sound": settings["alert_default_sound"]},
                 "people": people}
         if download:
             return Response(json.dumps(data), media_type="application/json",

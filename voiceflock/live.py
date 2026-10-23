@@ -121,6 +121,7 @@ class LiveMatcher:
             info = g.persons.get(pid, {"name": f"#{pid}", "kind": "named"})
             nxt = ranked[i + 1][1] if i + 1 < len(ranked) else 0.0
             out.append({"person_id": pid, "name": info["name"], "kind": info["kind"], "flagged": bool(info.get("alert")),
+                        "alert_sound": info.get("alert_sound"), "alert_message": info.get("alert_message"),
                         "probability": round(p, 4), "instant": round(c.probability, 4) if c else 0.0, "margin": round(p - nxt, 4)})
         alert = bool(out) and (out[0]["kind"] == "named" or out[0]["flagged"]) and out[0]["probability"] >= self.match_threshold
         return LiveFrame(t, self.last_level, True, speech_s, out, alert)

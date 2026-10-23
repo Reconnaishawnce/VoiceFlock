@@ -76,6 +76,14 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "label": "Default calibration slope (s-norm)", "help": "p = sigmoid(a*(score+b)) until you run `calibrate`."},
     "calib_snorm_b": {"default": -3.6, "type": "float", "group": "Scoring",
         "label": "Default calibration offset (s-norm)", "help": ""},
+    # --- alerts ---
+    "alert_default_message": {"default": "Attention. [NAME], your voice was detected nearby. It's time to regulate mass surveillance.",
+        "type": "str", "group": "Alerts", "label": "Default spoken alert",
+        "help": "Spoken (text-to-speech) when a flagged voice is heard. [NAME] is replaced with the person's name. Per-person messages override this."},
+    "alert_default_sound": {"default": "siren", "type": "str", "group": "Alerts",
+        "label": "Default alarm sound", "help": "siren | klaxon | chime | none"},
+    "alert_speak_on_laptop": {"default": True, "type": "bool", "group": "Alerts",
+        "label": "Laptop Live mode plays alarm + speaks", "help": "Uses the browser's speech engine; the phone always does."},
     # --- live listening ---
     "live_window_s": {"default": 4.0, "type": "float", "group": "Live",
         "label": "Live window (s of speech)", "help": "Seconds of actual speech (pauses skipped) embedded at a time in Live mode."},

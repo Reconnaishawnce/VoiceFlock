@@ -8,7 +8,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.exp
 
-data class Person(val id: Int, val name: String, val kind: String, val alertDefault: Boolean, val prints: List<FloatArray>)
+data class Person(
+    val id: Int, val name: String, val kind: String, val alertDefault: Boolean, val prints: List<FloatArray>,
+    val alertSound: String? = null,      // siren | klaxon | chime | none | null = library default
+    val alertMessage: String? = null,    // template with [NAME]; null = library default
+)
 
 data class Match(val person: Person, val cosine: Float, val probability: Float)
 
@@ -23,6 +27,8 @@ class Gallery(
     val minLevelDb: Float,
     val generatedAt: String,
     val dim: Int,
+    val defaultMessage: String = DEFAULT_MESSAGE,
+    val defaultSound: String = "siren",
 ) {
     private val owners: IntArray
     private val matrix: Array<FloatArray>
@@ -57,6 +63,9 @@ class Gallery(
     }
 
     companion object {
+        const val DEFAULT_MESSAGE = "Attention. [NAME], your voice was detected nearby. It's time to regulate mass surveillance."
+        fun render(template: String, name: String) = template.replace("[NAME]", name).replace("{name}", name).trim()
+
         fun file(context: Context): File = File(context.filesDir, "gallery.json")
         fun modelFile(context: Context): File = File(context.filesDir, "ecapa_voxceleb.onnx")
 
@@ -82,12 +91,17 @@ class Gallery(
                     if (e.size == dim) prints.add(normalise(e))
                 }
                 if (prints.isNotEmpty())
-                    people.add(Person(p.getInt("id"), p.getString("name"), p.optString("kind", "named"), p.optBoolean("alert", false), prints))
+                    people.add(Person(p.getInt("id"), p.getString("name"), p.optString("kind", "named"), p.optBoolean("alert", false), prints,
+                        p.optString("alert_sound", "").ifEmpty { null }.takeIf { it != "null" },
+                        p.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" }))
             }
+            val defaults = j.optJSONObject("alert_defaults")
             return Gallery(
                 people, cal.getDouble("a"), cal.getDouble("b"), j.optDouble("match_threshold", 0.75).toFloat(),
-                j.optDouble("window_s", 3.0).toFloat(), j.optDouble("hop_s", 1.0).toFloat(),
+                j.optDouble("window_s", 4.0).toFloat(), j.optDouble("hop_s", 1.0).toFloat(),
                 j.optDouble("min_level_db", -45.0).toFloat(), j.optString("generated_at", ""), dim,
+                defaults?.optString("message", DEFAULT_MESSAGE)?.ifEmpty { DEFAULT_MESSAGE } ?: DEFAULT_MESSAGE,
+                defaults?.optString("sound", "siren")?.ifEmpty { "siren" } ?: "siren",
             )
         }
 

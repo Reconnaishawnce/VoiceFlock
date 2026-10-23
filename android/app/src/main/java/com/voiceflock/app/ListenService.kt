@@ -40,6 +40,7 @@ class ListenService : Service() {
         if (intent?.action == ACTION_STOP) { stopListening(); stopSelf(); return START_NOT_STICKY }
         if (running) return START_STICKY
         Alerts.ensureChannels(this)
+        Alerts.initTts(this)
         val notif = Alerts.serviceNotification(this, "starting…")
         if (Build.VERSION.SDK_INT >= 29) startForeground(Alerts.NOTIF_SERVICE, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         else startForeground(Alerts.NOTIF_SERVICE, notif)
@@ -92,6 +93,8 @@ class ListenService : Service() {
                             if (now - last > prefs.cooldownSeconds * 1000L) {
                                 lastAlertAt[top.person.id] = now
                                 Alerts.voiceAlert(this, top.person.name, top.probability)
+                                Alerts.performAlert(this, top.person.name, prefs.soundFor(top.person, gallery),
+                                    prefs.messageFor(top.person, gallery), prefs.demoMode)
                                 AppState.pushLog("${fmt.format(Date())}  ${top.person.name}  ${(top.probability * 100).toInt()}%")
                             }
                         }

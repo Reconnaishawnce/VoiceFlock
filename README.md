@@ -240,7 +240,14 @@ network, and audio is never stored or sent anywhere.
    screen off. The Voices tab lets you flag/unflag on the phone (overrides the laptop's flags) or alert on
    every known voice. Re-sync whenever the library changes.
 
-How it works: a 3 s window is embedded every second (≈100 ms of CPU on a mid-range phone, nothing during
+**Custom alerts (the bit).** Each flagged person can have their own alarm sound (synthesised siren, klaxon
+or chime) and a spoken line, set on the laptop's person page (with a Test button) or on the phone by
+tapping the name in Voices. `[NAME]` is replaced with the person's name; the default template lives in
+Settings → Alerts. On the phone, **Demo mode** plays the alarm and the text-to-speech line through the
+alarm channel at full volume even when the phone is silent; the laptop's Live tab does the same with the
+browser's speech engine.
+
+How it works: the last 4 s of speech are embedded every second (≈100 ms of CPU on a mid-range phone, nothing during
 silence), scored against every print with cosine similarity, calibrated with the laptop's calibration,
 smoothed over consecutive speech windows, and alerted when a flagged person is above the match threshold
 (cooldown 30 s per person). Expect roughly 5-10% battery per hour of active listening.

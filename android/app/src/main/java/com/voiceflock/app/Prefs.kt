@@ -33,6 +33,28 @@ class Prefs(context: Context) {
         get() = sp.getString("last_sync", "") ?: ""
         set(v) = sp.edit().putString("last_sync", v).apply()
 
+    /** Demo mode: alarm + speech at full volume on the alarm channel, even when the phone is silent. */
+    var demoMode: Boolean
+        get() = sp.getBoolean("demo_mode", true)
+        set(v) = sp.edit().putBoolean("demo_mode", v).apply()
+
+    /** Phone-side default spoken message; empty = use the library's default. */
+    var defaultMessage: String
+        get() = sp.getString("default_message", "") ?: ""
+        set(v) = sp.edit().putString("default_message", v).apply()
+
+    fun messageOverride(personId: Int): String? = sp.getString("msg_$personId", null)
+    fun setMessageOverride(personId: Int, msg: String?) =
+        sp.edit().apply { if (msg.isNullOrBlank()) remove("msg_$personId") else putString("msg_$personId", msg) }.apply()
+    fun soundOverride(personId: Int): String? = sp.getString("snd_$personId", null)
+    fun setSoundOverride(personId: Int, snd: String?) =
+        sp.edit().apply { if (snd.isNullOrBlank()) remove("snd_$personId") else putString("snd_$personId", snd) }.apply()
+
+    /** Resolve what to play/say for a person: phone override > library per-person > phone default > library default. */
+    fun soundFor(p: Person, g: Gallery): String = soundOverride(p.id) ?: p.alertSound ?: g.defaultSound
+    fun messageFor(p: Person, g: Gallery): String =
+        Gallery.render(messageOverride(p.id) ?: p.alertMessage ?: defaultMessage.ifBlank { g.defaultMessage }, p.name)
+
     /** Per-person alert flag set on the phone; absent = use the server's flag. */
     fun alertOverride(personId: Int): Boolean? =
         if (sp.contains("alert_$personId")) sp.getBoolean("alert_$personId", false) else null

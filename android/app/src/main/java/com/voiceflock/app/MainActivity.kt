@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -37,6 +38,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Alerts.ensureChannels(this)
+        Alerts.initTts(this)
         if (AppState.gallery.value == null) AppState.gallery.value = Gallery.load(this)
         handleShare(intent)
         setContent { MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF5AD1A8))) { App() } }
@@ -154,7 +156,9 @@ fun VoicesScreen() {
     var alertAll by remember { mutableStateOf(prefs.alertAllKnown) }
     var version by remember { mutableIntStateOf(0) }
     var filter by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf<Person?>(null) }
     val g = gallery
+    editing?.let { p -> if (g != null) AlertEditor(p, g, prefs, onClose = { editing = null; version++ }) }
     Column(Modifier.padding(16.dp).fillMaxSize()) {
         if (g == null) { Text("Sync first."); return }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -162,7 +166,7 @@ fun VoicesScreen() {
             Switch(alertAll, { alertAll = it; prefs.alertAllKnown = it })
         }
         OutlinedTextField(filter, { filter = it }, label = { Text("search") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Text("${g.people.size} voices · flagged ones alert even when the phone is in your pocket. Changes apply the next time you press Start.",
+        Text("${g.people.size} voices · flagged ones alert even when the phone is in your pocket. Tap a name to set its alarm and spoken message. Changes apply the next time you press Start.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
         key(version) {
             LazyColumn {
@@ -170,9 +174,10 @@ fun VoicesScreen() {
                 items(list, key = { it.id }) { p ->
                     val on = prefs.alertOverride(p.id) ?: (p.alertDefault || (alertAll && p.kind == "named"))
                     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.weight(1f).clickable { editing = p }) {
                             Text(p.name, fontWeight = FontWeight.Medium)
-                            Text(if (p.kind == "named") "known · ${p.prints.size} prints" else "unnamed · ${p.prints.size} prints",
+                            Text((if (p.kind == "named") "known" else "unnamed") + " · ${p.prints.size} prints · ${prefs.soundFor(p, g)}" +
+                                (if (prefs.messageOverride(p.id) != null || p.alertMessage != null) " · custom message" else ""),
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(on, { prefs.setAlertOverride(p.id, it); version++ })
@@ -181,6 +186,32 @@ fun VoicesScreen() {
             }
         }
     }
+}
+
+@Composable
+fun AlertEditor(p: Person, g: Gallery, prefs: Prefs, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    var msg by remember { mutableStateOf(prefs.messageOverride(p.id) ?: p.alertMessage ?: "") }
+    var snd by remember { mutableStateOf(prefs.soundOverride(p.id) ?: p.alertSound ?: "") }
+    val sounds = listOf("" to "library default (${g.defaultSound})", "siren" to "siren", "klaxon" to "klaxon", "chime" to "chime", "none" to "no sound")
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(p.name) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Alarm sound", style = MaterialTheme.typography.labelMedium)
+                sounds.forEach { (v, label) -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { snd = v }) { RadioButton(snd == v, { snd = v }); Text(label) } }
+                OutlinedTextField(msg, { msg = it }, label = { Text("Spoken message ([NAME] = ${p.name}); empty = default") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                Text("Will say: “${Gallery.render(msg.ifBlank { prefs.defaultMessage.ifBlank { g.defaultMessage } }, p.name)}”",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = {
+                    Alerts.performAlert(ctx, p.name, snd.ifBlank { g.defaultSound }, Gallery.render(msg.ifBlank { prefs.defaultMessage.ifBlank { g.defaultMessage } }, p.name), prefs.demoMode)
+                }) { Text("▶ Test now") }
+            }
+        },
+        confirmButton = { TextButton(onClick = { prefs.setMessageOverride(p.id, msg); prefs.setSoundOverride(p.id, snd); onClose() }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
 }
 
 fun modelLine(ctx: android.content.Context): String {
@@ -239,6 +270,19 @@ fun SettingsScreen() {
             Text("Library: ${it.people.size} voices, ${it.printCount} prints, generated ${it.generatedAt.take(16).replace('T', ' ')}. Server threshold ${(it.threshold * 100).toInt()}%.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        HorizontalDivider()
+        Text("Alerts", style = MaterialTheme.typography.titleSmall)
+        var demo by remember { mutableStateOf(prefs.demoMode) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) { Text("Demo mode"); Text("Alarm + voice at full volume on the alarm channel, even on silent.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Switch(demo, { demo = it; prefs.demoMode = it })
+        }
+        var defMsg by remember { mutableStateOf(prefs.defaultMessage) }
+        OutlinedTextField(defMsg, { defMsg = it; prefs.defaultMessage = it }, label = { Text("Default spoken message (empty = library's: ${gallery?.defaultMessage?.take(40) ?: Gallery.DEFAULT_MESSAGE.take(40)}…)") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+        OutlinedButton(onClick = {
+            val g = gallery
+            Alerts.performAlert(ctx, "Nancy Pelosi", g?.defaultSound ?: "siren", Gallery.render(defMsg.ifBlank { g?.defaultMessage ?: Gallery.DEFAULT_MESSAGE }, "Nancy Pelosi"), prefs.demoMode)
+        }, modifier = Modifier.fillMaxWidth()) { Text("▶ Test alarm + voice") }
         HorizontalDivider()
         Text("Matching", style = MaterialTheme.typography.titleSmall)
         Text(if (thr <= 0f) "Match threshold: use the laptop's setting" else "Match threshold override: ${(thr * 100).toInt()}%")

@@ -311,9 +311,53 @@ $("#ov-map").addEventListener("mouseleave", () => $("#ov-tip").classList.add("hi
 $("#ov-map").addEventListener("click", (e) => { const h = e.target._hit; if (h) openPerson(h.v.id); });
 window.addEventListener("resize", () => { if (STATE.tab === "overview" && OV) drawMap(OV.voices); });
 
-/* ---------------- live listen ---------------- */
+/* ---------------- alarms & speech (browser) ---------------- */
 let LIVE = null;
-function beep() { try { const ac = new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.18); } catch (e) {} }
+let ALARM_AC = null;
+function alarmCtx() { ALARM_AC = ALARM_AC || new (window.AudioContext || window.webkitAudioContext)(); if (ALARM_AC.state === "suspended") ALARM_AC.resume(); return ALARM_AC; }
+function beep() { try { const ac = alarmCtx(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.18); } catch (e) {} }
+/** Synthesised alarms (no copyrighted ringtones): returns the duration in seconds. */
+function playAlarm(kind) {
+  kind = kind || SETTINGS.alert_default_sound || "siren";
+  if (kind === "none") return 0;
+  const ac = alarmCtx(), t0 = ac.currentTime, g = ac.createGain(); g.connect(ac.destination);
+  if (kind === "siren") {            // civil-defence wail: 400->800 Hz, 2 s up / 2 s down, twice, with a 2nd harmonic
+    const dur = 8; g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.6); g.gain.setValueAtTime(0.5, t0 + dur - 0.8); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    [1, 2].forEach((h, i) => { const o = ac.createOscillator(); o.type = "sawtooth"; const og = ac.createGain(); og.gain.value = i ? 0.25 : 0.7; o.connect(og); og.connect(g);
+      for (let c = 0; c < 2; c++) { o.frequency.setValueAtTime(400 * h, t0 + c * 4); o.frequency.exponentialRampToValueAtTime(800 * h, t0 + c * 4 + 2); o.frequency.exponentialRampToValueAtTime(400 * h, t0 + c * 4 + 4); }
+      o.start(t0); o.stop(t0 + dur); });
+    const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2200; g.disconnect(); g.connect(lp); lp.connect(ac.destination);
+    return dur;
+  }
+  if (kind === "klaxon") {           // pulsed buzzer
+    const dur = 4; const o = ac.createOscillator(); o.type = "square"; o.frequency.value = 330; o.connect(g); g.gain.value = 0;
+    for (let i = 0; i < 8; i++) { g.gain.setValueAtTime(0.35, t0 + i * 0.5); g.gain.setValueAtTime(0, t0 + i * 0.5 + 0.3); }
+    o.start(t0); o.stop(t0 + dur); return dur;
+  }
+  // chime
+  [660, 880, 1320].forEach((f, i) => { const o = ac.createOscillator(); o.type = "sine"; o.frequency.value = f; const og = ac.createGain(); og.gain.setValueAtTime(0.25, t0 + i * 0.18); og.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.18 + 1.2); o.connect(og); og.connect(ac.destination); o.start(t0 + i * 0.18); o.stop(t0 + i * 0.18 + 1.3); });
+  return 1.8;
+}
+function speak(text) {
+  if (!("speechSynthesis" in window) || !text) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text); u.rate = 0.95; u.pitch = 1.0; u.volume = 1.0;
+  const v = speechSynthesis.getVoices().find((v) => /en[-_]US/i.test(v.lang)) || null; if (v) u.voice = v;
+  speechSynthesis.speak(u);
+}
+const renderMessage = (tpl, name) => (tpl || SETTINGS.alert_default_message || "").replace(/\[NAME\]/g, name).replace(/\{name\}/g, name);
+/** The full bit: alarm, then the spoken line (twice is in the template if you want it twice). */
+function runAlert(name, sound, message) {
+  const d = playAlarm(sound);
+  setTimeout(() => speak(renderMessage(message, name)), Math.max(0, d * 1000 - 400));
+}
+function testAlert(personId) {
+  const snd = $(`#as-${personId}`)?.value, msg = $(`#am-${personId}`)?.value, name = $(`#am-${personId}`)?.dataset.name || "this person";
+  runAlert(name, snd || null, msg || null);
+}
+async function saveAlertSettings(personId) {
+  try { await api(`/api/persons/${personId}`, { method: "PATCH", body: { alert_sound: $(`#as-${personId}`).value, alert_message: $(`#am-${personId}`).value } }); toast("Alert saved"); } catch (e) { onErr(e); }
+}
 $("#btn-live").onclick = async () => {
   if (LIVE) { stopLive(); return; }
   const st = $("#live-status");
@@ -374,7 +418,8 @@ function renderLive(m) {
     <div class="others">${m.candidates.slice(1).map((c) => `${esc(c.name)} ${pct(c.probability)}`).join(" · ") || ""}<span style="float:right">${m.speech_s}s of speech</span></div>`;
   if (m.alert && Date.now() - LIVE.lastAlert > 8000) {
     LIVE.lastAlert = Date.now();
-    if ($("#live-beep").checked) beep();
+    if (top.flagged && SETTINGS.alert_speak_on_laptop) runAlert(top.name, top.alert_sound, top.alert_message);
+    else if ($("#live-beep").checked) beep();
     if ($("#live-notify").checked && "Notification" in window && Notification.permission === "granted") new Notification("VoiceFlock", { body: `${top.name} (${pct(top.probability)})` });
     LIVE.log.unshift(`${new Date().toLocaleTimeString()} — ${top.name} ${pct(top.probability)}${known ? "" : " (unnamed)"}`);
     $("#live-log").innerHTML = LIVE.log.slice(0, 50).map((l) => `<div class="item">${esc(l)}</div>`).join("");
@@ -476,6 +521,14 @@ async function loadPersonDetail(id) {
     el.innerHTML = `<div class="hdr"><h2 style="display:flex;align-items:center;gap:10px">${glyphSvg(p.glyph, p.kind === "named" ? "var(--s1)" : "var(--s3)", 36)} ${esc(p.name)} <span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span>${bell(p)}</h2>
       <div class="actions"><button class="small" onclick="renamePerson(${p.id})">Rename</button><button class="small danger" onclick="deletePerson(${p.id})">Delete</button><button class="small" onclick="STATE.personDetail=null;loadBuild()">Close</button></div></div>
       <div class="sub">${p.n_prints} prints from ${p.n_sources} recordings · ${fmtT(p.speech_seconds)} of speech ${p.notes ? "· " + esc(p.notes) : ""}</div>
+      <h3>Alert</h3>
+      <div class="sub">${p.alert ? "🔔 Alerting on this voice (Live + phone)." : "Not alerting. Click the bell above to turn it on."} The message is spoken by text-to-speech after the alarm; <code>[NAME]</code> becomes "${esc(p.name)}". Leave the message empty to use the default from Settings.</div>
+      <div class="inline" style="flex-wrap:wrap;align-items:flex-start">
+        <select id="as-${p.id}" style="flex:0 0 160px"><option value="" ${!p.alert_sound ? "selected" : ""}>default alarm (${esc(SETTINGS.alert_default_sound || "siren")})</option>${["siren", "klaxon", "chime", "none"].map((k) => `<option value="${k}" ${p.alert_sound === k ? "selected" : ""}>${k}</option>`).join("")}</select>
+        <textarea id="am-${p.id}" data-name="${esc(p.name)}" rows="2" style="flex:1 1 320px" placeholder="${esc(SETTINGS.alert_default_message || "")}">${esc(p.alert_message || "")}</textarea>
+        <button class="small primary" onclick="saveAlertSettings(${p.id})">Save</button><button class="small" onclick="testAlert(${p.id})">▶ Test on this laptop</button>
+      </div>
+      <div class="sub">Will say: “${esc(p.spoken)}”</div>
       <h3>Heard in</h3>${p.heard_in.map((h) => `<div class="item"><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> @ ${fmtT(h.first_start_s)} <span class="pill">${esc(h.assignment)}</span>
         ${h.clip_url ? `<audio controls preload="none" src="${h.clip_url}"></audio>` : ""}<div class="actions"><button class="small" onclick="unassign(${h.speaker_id})">Remove this recording from the person (undo)</button></div></div>`).join("") || '<p class="muted">none</p>'}
       <h3>Prints (provenance)</h3><table><tr><th>id</th><th>type</th><th>origin</th><th>recording</th><th>speech</th><th>quality</th><th>added</th></tr>
