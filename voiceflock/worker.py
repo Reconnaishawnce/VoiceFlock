@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 
-from . import db, gallery
+from . import config, db, gallery
 
 log = logging.getLogger(__name__)
 FEED_POLL_EVERY_S = 60.0
@@ -91,6 +91,11 @@ def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
         elif job["type"] == "transcribe":
             from .transcribe import transcribe_source
             result = transcribe_source(conn, int(job["source_id"]), progress)
+            if config.Settings(conn)["suggest_auto"]:
+                enqueue(conn, int(job["source_id"]), "suggest_names", priority=-2, dedupe=True)
+        elif job["type"] == "suggest_names":
+            from .suggest import suggest_names
+            result = suggest_names(conn, int(job["source_id"]), progress)
         elif job["type"] == "export_model":
             from .onnx_export import export
             progress("exporting ECAPA to ONNX", 0.1)

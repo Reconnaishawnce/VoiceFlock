@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS sources (
   stills_info TEXT,
   transcript_status TEXT,                   -- NULL | queued | running | done | failed
   transcript_language TEXT,
-  transcript_info TEXT                      -- JSON {words, segments, model} or {error}
+  transcript_info TEXT,                     -- JSON {words, segments, model} or {error}
+  description TEXT                          -- JSON {title, description, channel} fetched for name suggestions
 );
 
 CREATE TABLE IF NOT EXISTS jobs (

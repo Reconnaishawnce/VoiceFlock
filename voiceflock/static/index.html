@@ -184,6 +184,10 @@
         <div class="inline" style="max-width:420px"><input id="wipe-confirm" placeholder='type WIPE to enable'><button class="small danger" id="btn-wipe" disabled>Wipe everything</button></div>
         <div id="wipe-msg" class="muted"></div>
       </details>
+      <details open><summary><b>Name suggestions</b></summary>
+        <p class="muted">After a recording is processed, VoiceFlock reads on-screen captions, the title and description, and who was introduced or addressed in the transcript, and asks a language model to weigh them. Suggestions appear as chips next to the name box; nothing is named automatically. Settings for this are under <i>Name suggestions</i> above.</p>
+        <div id="suggest-status" class="muted"><div class="skel" style="width:50%"></div></div>
+      </details>
       <details open><summary><b>Probability calibration</b></summary>
         <p class="muted">Every Confirm, Name, Enroll and Reject you make is a labelled trial. Fitting the probability model to them makes the percentages mean something for your microphones and rooms, instead of generic constants.</p>
         <div id="calibration"><div class="skel" style="width:60%"></div></div>

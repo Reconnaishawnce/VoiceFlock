@@ -300,6 +300,25 @@ present; press **Transcribe** on any recording otherwise, or Settings → *Trans
 Raw words are cached in `data/transcripts/` so a reprocess only redoes the attribution.
 Command line: `voiceflock transcribe <id|all> [--force]`.
 
+## Name suggestions (who is this voice?)
+
+After processing (and after the transcript when there is one) VoiceFlock works out who each voice probably
+is from context, and offers the answers as chips next to the name box with the evidence behind each one.
+Nothing is named automatically.
+
+1. **On-screen captions.** Frames are grabbed at the start of each voice's longest turns (from the local video,
+   or two seconds of ≤480p video from YouTube) and the lower third is read with a local OCR model
+   (RapidOCR, no network). "SEN. ELIZABETH WARREN (D-MA)" becomes *Elizabeth Warren*.
+2. **Title, description and transcript.** Names in the video's title and description, and the transcript
+   hints ("the chair recognizes Senator Warren", "my name is …", "thank you, Senator X").
+3. **A language model weighs it all.** By default a local model through [Ollama](https://ollama.com)
+   (install it, then `ollama pull llama3.1:8b`; it uses the same GPU). Or set *Language model* to
+   `anthropic` with an API key to use Claude, which reasons better on messy cases but sends transcript
+   excerpts to the API. Or `none` to rely on captions and names alone.
+
+Settings → *Name suggestions* shows whether OCR and the model are ready, and *Suggest names for all
+recordings* backfills the library. Each recording also has a *Suggest names* button.
+
 ## Calibration and noise
 
 **Calibrate from your decisions.** Every Confirm, Name, Enroll and Reject is a labelled trial. Settings →

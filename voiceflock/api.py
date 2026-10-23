@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, selfcal, stills, transcribe, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, selfcal, stills, suggest, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -566,7 +566,35 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         s["transcript_info"] = json.loads(s["transcript_info"]) if s.get("transcript_info") else None
         s["transcript_job"] = db.row(conn, "SELECT id, status, stage, progress, error FROM jobs WHERE source_id=? AND type='transcribe' ORDER BY id DESC LIMIT 1", (sid,))
         s["transcript_lines"] = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE source_id=?", (sid,)).fetchone()[0]
+        s["suggest_job"] = db.row(conn, "SELECT id, status, stage, progress, error, result FROM jobs WHERE source_id=? AND type='suggest_names' ORDER BY id DESC LIMIT 1", (sid,))
+        if s["suggest_job"] and s["suggest_job"].get("result"):
+            try:
+                s["suggest_job"]["result"] = json.loads(s["suggest_job"]["result"])
+            except Exception:
+                pass
+        s.pop("description", None)
         return s
+
+    @app.post("/api/sources/{sid}/suggest")
+    def suggest_now(sid: int, conn=Depends(get_conn)):
+        """Queue name suggestions (captions + metadata + transcript hints + language model) for this recording."""
+        if not db.row(conn, "SELECT id FROM sources WHERE id=? AND status='done'", (sid,)):
+            raise HTTPException(400, "the recording must be processed first")
+        with db.tx(conn):
+            jid = worker.enqueue(conn, sid, "suggest_names", priority=-2, dedupe=True)
+        return {"job_id": jid}
+
+    @app.get("/api/suggest/status")
+    def suggest_status(conn=Depends(get_conn)):
+        return suggest.llm_status(config.Settings(conn))
+
+    @app.post("/api/suggest/backfill")
+    def suggest_backfill(conn=Depends(get_conn)):
+        ids = [r["id"] for r in conn.execute("SELECT id FROM sources WHERE status='done' AND incognito=0")]
+        with db.tx(conn):
+            for x in ids:
+                worker.enqueue(conn, x, "suggest_names", priority=-4, dedupe=True)
+        return {"queued": len(ids)}
 
     @app.get("/api/sources/{sid}/transcript")
     def get_transcript(sid: int, speaker_id: int | None = None, conn=Depends(get_conn)):

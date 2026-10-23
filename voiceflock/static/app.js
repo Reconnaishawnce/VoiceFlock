@@ -281,8 +281,8 @@ async function loadSourceDetail(id) {
   try {
     const src = await api(`/api/sources/${id}`);
     const el = $("#lib-detail");
-    if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.transcript_status, src.transcript_lines, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
-    el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.transcript_status, src.transcript_lines, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]);
+    if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.transcript_status, src.transcript_lines, src.suggest_job?.status, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, (s.name_hints || []).length, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
+    el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.transcript_status, src.transcript_lines, src.suggest_job?.status, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, (s.name_hints || []).length, s.candidates.map((c) => c.status)])]);
     const sameSource = STATE.src?.id === src.id;
     el.innerHTML = `<button class="back" onclick="back('library')">← Back</button><div class="card">${sourceView(src)}</div>`;
     el.classList.add("tab");
@@ -317,10 +317,32 @@ function sourceView(src) {
       ${src.status === "done" && !src.incognito ? `<button class="small primary" onclick="queueReview(${src.id})" title="Put every unnamed voice of this recording in the review queue">${src.review_pending ? `Review queue: ${src.review_pending} to do` : "Add voices to review queue"}</button>` : ""}
       ${src.incognito ? "" : `<button class="small" onclick="forgetSource(${src.id})" title="Remove everything this recording added to the library">Forget voices from this file</button>`}
       ${src.status === "done" && !src.incognito ? `<button class="small" onclick="makeStills(${src.id})" title="Cut low-res frames at each speaker's longest turns">${(src.speakers || []).some((x) => (x.stills || []).length) ? "Redo stills" : "Make stills"}</button>` : ""}
+      ${src.status === "done" && !src.incognito ? suggestBtn(src) : ""}
       <button class="small" onclick="reprocess(${src.id})">Reprocess</button>
       <button class="small danger" onclick="deleteSource(${src.id})">Delete recording</button>
     </div>
     ${(src.speakers || []).map((sp, i) => speakerCard(sp, src, i)).join("") || (src.status === "done" ? '<p class="muted">No speakers passed the minimum speech length.</p>' : "")}`;
+}
+function suggestBtn(src) {
+  const j = src.suggest_job;
+  if (j && (j.status === "queued" || j.status === "running")) return `<span class="muted">suggesting names… ${j.status === "running" ? `${esc(j.stage || "")} ${Math.round(j.progress || 0)}%` : "queued"}</span>`;
+  const done = j && j.status === "done" && j.result;
+  const tip = done ? `last run: ${j.result.with_suggestions}/${j.result.speakers} voices got suggestions · ${j.result.ocr_frames} caption reads · model: ${j.result.llm || "none"}` : "On-screen captions, title/description, transcript hints and a language model";
+  return `<button class="small" onclick="suggestNow(${src.id})" title="${esc(tip)}">${done ? "Suggest names again" : "Suggest names"}</button>${j && j.status === "failed" ? `<span class="muted" style="color:var(--bad)">suggestions failed: ${esc(j.error || "")}</span>` : ""}`;
+}
+async function suggestNow(sid) { try { await api(`/api/sources/${sid}/suggest`, { method: "POST" }); toast("Name suggestions queued"); render(); } catch (e) { onErr(e); } }
+async function suggestBackfill() { try { const r = await api("/api/suggest/backfill", { method: "POST" }); toast(`Queued name suggestions for ${r.queued} recordings`); } catch (e) { onErr(e); } }
+async function renderSuggestStatus() {
+  const el = $("#suggest-status"); if (!el) return;
+  try {
+    const st = await api("/api/suggest/status");
+    const ocr = st.ocr ? "caption OCR ready" : "caption OCR not installed (run update.bat)";
+    let llm;
+    if (st.provider === "ollama") llm = st.reachable ? (st.model_present ? `Ollama reachable, model ready` : `Ollama reachable but the model is not pulled: run <code>ollama pull ${esc(SETTINGS.ollama_model)}</code> (have: ${(st.models || []).map(esc).join(", ") || "none"})`) : `Ollama not reachable at ${esc(SETTINGS.ollama_url)}: install it from ollama.com, then <code>ollama pull ${esc(SETTINGS.ollama_model)}</code>`;
+    else if (st.provider === "anthropic") llm = st.key_set ? `Claude (${esc(st.model)}) with your key` : "Claude selected but no API key set";
+    else llm = "no language model: suggestions come from captions, metadata and transcript hints only";
+    el.innerHTML = `${ocr} · ${llm} <button class="small" onclick="suggestBackfill()">Suggest names for all recordings</button>`;
+  } catch (e) { el.textContent = e.message; }
 }
 /* ---------------- transcript ---------------- */
 let TR = { sid: null, lines: [], follow: true, filter: null, q: "" };
@@ -375,9 +397,11 @@ function timeline(src) {
   return `<div class="timeline" id="tl-${src.id}" onclick="seekFrac(${src.id}, event)">${segs}<div class="cursor" style="left:0"></div></div><div class="tl-legend">${legend}</div>`;
 }
 /** Names spoken around this voice's turns ("the chair recognizes Senator Warren"): one click fills the name box. */
-function hintChips(sp) {
+function hintChips(sp, withWhy = false) {
   const h = sp.name_hints || []; if (!h.length) return "";
-  return `<div class="hints"><span class="muted">Heard in the room:</span> ${h.map((x) => `<button class="small" onclick="useHint(this)" data-name="${esc(x.name)}" title="score ${x.score}">${esc(x.name)}</button>`).join("")}</div>`;
+  const why = (x) => (x.evidence || []).join(" · ") || "introduced or addressed by name in the transcript";
+  return `<div class="hints"><span class="muted">${h.some((x) => x.evidence) ? "Suggested:" : "Heard in the room:"}</span> ${h.map((x) => `<button class="small" onclick="useHint(this)" data-name="${esc(x.name)}" title="${esc(why(x))} (score ${x.score})">${esc(x.name)}</button>`).join("")}</div>
+    ${withWhy ? `<div class="why">${h.slice(0, 2).map((x) => `<div><b>${esc(x.name)}</b> · ${esc(why(x))}</div>`).join("")}</div>` : ""}`;
 }
 /** Put a name hint into the nearest name box (side panel or speaker card). */
 function useHint(btn) {
@@ -410,7 +434,7 @@ function openSpeaker(id, play = false) {
     <div class="namebox">
       <div class="nb-label">${unnamed ? "Who is this?" : "Rename or reassign"}</div>
       <div class="inline" style="margin:0"><input placeholder="${unnamed ? "Type a name and press Enter" : sp.person.name}" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)"><button class="primary" onclick="nameSpeaker(${sp.id}, this)">${unnamed ? "Name" : "Save"}</button></div>
-      ${hintChips(sp)}
+      ${hintChips(sp, true)}
       <div class="muted" style="font-size:12px;margin-top:6px">${sp.person && sp.person.kind === "provisional" ? `Names <b>${esc(sp.person.name)}</b> everywhere it was heard. ` : ""}An existing name merges them with that person.</div>
     </div>
     ${saidBox(src, sp)}
@@ -847,7 +871,7 @@ async function loadSettings() {
     f.innerHTML = Object.entries(groups).map(([g, keys]) => `<div class="grp">${g}</div>` + keys.map((k) => { const s = SPECS[k], v = SETTINGS[k];
       const input = s.type === "bool" ? `<input type="checkbox" name="${k}" ${v ? "checked" : ""}>` : s.type === "secret" ? `<input type="password" name="${k}" value="${esc(v)}" autocomplete="off">` : s.type === "float" ? `<input type="number" step="0.01" name="${k}" value="${v}">` : s.type === "int" ? `<input type="number" step="1" name="${k}" value="${v}">` : (k === "alert_default_message" ? `<textarea name="${k}" rows="2">${esc(v)}</textarea>` : `<input name="${k}" value="${esc(v)}">`);
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
-    renderSelftest(); renderPhone(); renderVersion();
+    renderSelftest(); renderPhone(); renderVersion(); renderSuggestStatus();
     const st = await api("/api/stats");
     $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <button class="small" onclick="transcribeBackfill()">Transcribe existing recordings (${st.untranscribed} left)</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;

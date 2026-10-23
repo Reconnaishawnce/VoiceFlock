@@ -102,6 +102,21 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "label": "Whisper model", "help": "auto = large-v3-turbo on a GPU, base on CPU. Or tiny | base | small | medium | large-v3 | large-v3-turbo."},
     "transcribe_language": {"default": "", "type": "str", "group": "Transcripts",
         "label": "Language", "help": "ISO code such as en; empty = detect per recording."},
+    # --- name suggestions ---
+    "suggest_auto": {"default": True, "type": "bool", "group": "Name suggestions",
+        "label": "Suggest names for new recordings", "help": "Runs after processing (and after the transcript when there is one)."},
+    "suggest_ocr": {"default": True, "type": "bool", "group": "Name suggestions",
+        "label": "Read on-screen captions", "help": "OCR the lower third of video frames at the start of each voice's turns (local, RapidOCR)."},
+    "llm_provider": {"default": "ollama", "type": "str", "group": "Name suggestions",
+        "label": "Language model", "help": "ollama (local, free) · anthropic (Claude, needs a key) · none."},
+    "ollama_url": {"default": "http://localhost:11434", "type": "str", "group": "Name suggestions",
+        "label": "Ollama address", "help": "Install Ollama, then: ollama pull llama3.1:8b"},
+    "ollama_model": {"default": "llama3.1:8b", "type": "str", "group": "Name suggestions",
+        "label": "Ollama model", "help": "Any chat model you have pulled, e.g. llama3.1:8b, qwen2.5:7b, gemma3:12b."},
+    "anthropic_api_key": {"default": "", "type": "secret", "group": "Name suggestions",
+        "label": "Anthropic API key", "help": "Only used when Language model = anthropic. Transcript excerpts are sent to the API."},
+    "anthropic_model": {"default": "claude-haiku-5-5", "type": "str", "group": "Name suggestions",
+        "label": "Claude model", "help": "claude-haiku-5-5 is cheap and fast; claude-sonnet-5-5 reasons better on messy cases."},
     # --- live listening ---
     "live_window_s": {"default": 4.0, "type": "float", "group": "Live",
         "label": "Live window (s of speech)", "help": "Seconds of actual speech (pauses skipped) embedded at a time in Live mode."},
@@ -127,6 +142,7 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
 ENV_OVERRIDES = {
     "hf_token": ("VOICEFLOCK_HF_TOKEN", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"),
     "device": ("VOICEFLOCK_DEVICE",),
+    "anthropic_api_key": ("VOICEFLOCK_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
 }
 
 

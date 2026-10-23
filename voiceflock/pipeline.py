@@ -296,7 +296,9 @@ def process_source(conn: sqlite3.Connection, source_id: int, progress: Progress 
         from . import transcribe, worker as wk
         if not source["incognito"] and (transcribe.wanted(settings) or transcribe.raw_path(source_id).exists()):
             conn.execute("UPDATE sources SET transcript_status='queued' WHERE id=?", (source_id,))
-            wk.enqueue(conn, source_id, "transcribe", priority=-2, dedupe=True)
+            wk.enqueue(conn, source_id, "transcribe", priority=-2, dedupe=True)      # suggestions follow the transcript
+        elif not source["incognito"] and settings["suggest_auto"]:
+            wk.enqueue(conn, source_id, "suggest_names", priority=-2, dedupe=True)
         if source["review"]:
             # the user wants to label this recording: queue every voice that isn't already a confident known match
             for r in results:
