@@ -88,6 +88,9 @@ def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
         elif job["type"] == "stills":
             from .stills import make_stills_for_source
             result = make_stills_for_source(conn, int(job["source_id"]), progress)
+        elif job["type"] == "transcribe":
+            from .transcribe import transcribe_source
+            result = transcribe_source(conn, int(job["source_id"]), progress)
         elif job["type"] == "export_model":
             from .onnx_export import export
             progress("exporting ECAPA to ONNX", 0.1)

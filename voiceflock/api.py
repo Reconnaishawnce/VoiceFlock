@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, stills, transfer, worker, youtube, selfcal
+from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, selfcal, stills, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -238,6 +238,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         sp.pop("embedding", None)
         sp["clip_url"] = f"/clips/{sp['clip_path']}" if sp.get("clip_path") else None
         sp["stills"] = [{"t": x["t"], "url": f"/stills/{x['file']}"} for x in json.loads(sp.get("stills") or "[]")]
+        sp["name_hints"] = json.loads(sp.get("name_hints") or "[]")
         sp["segments"] = db.rows(conn, "SELECT start_s, end_s FROM segments WHERE source_speaker_id=? ORDER BY start_s",
                                  (sp["id"],))
         if sp["segments"]:
@@ -415,6 +416,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 "SELECT COUNT(*) FROM matches m JOIN persons p ON p.id=m.person_id WHERE m.status='auto' AND p.kind='named'").fetchone()[0],
             "stills_mb": round(sum(p.stat().st_size for p in stills.still_dir().glob("*.jpg")) / 1e6, 1),
             "review_pending": conn.execute("SELECT COUNT(*) FROM source_speakers WHERE review_status='pending' AND ignored=0").fetchone()[0],
+            "transcribed": conn.execute("SELECT COUNT(*) FROM sources WHERE transcript_status='done'").fetchone()[0],
+            "untranscribed": conn.execute("SELECT COUNT(*) FROM sources WHERE status='done' AND incognito=0 AND (transcript_status IS NULL OR transcript_status='failed')").fetchone()[0],
         }
 
     # ---------------------------------------------------------------- settings
@@ -560,7 +563,52 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         s["settings"] = {k: config.Settings(conn)[k] for k in ("match_threshold", "confirm_threshold", "candidate_min_prob")}
         s["stills_info"] = json.loads(s["stills_info"]) if s.get("stills_info") else None
         s["review_pending"] = sum(1 for sp in s["speakers"] if sp.get("review_status") == "pending")
+        s["transcript_info"] = json.loads(s["transcript_info"]) if s.get("transcript_info") else None
+        s["transcript_job"] = db.row(conn, "SELECT id, status, stage, progress, error FROM jobs WHERE source_id=? AND type='transcribe' ORDER BY id DESC LIMIT 1", (sid,))
+        s["transcript_lines"] = conn.execute("SELECT COUNT(*) FROM transcript_segments WHERE source_id=?", (sid,)).fetchone()[0]
         return s
+
+    @app.get("/api/sources/{sid}/transcript")
+    def get_transcript(sid: int, speaker_id: int | None = None, conn=Depends(get_conn)):
+        q = "SELECT id, source_speaker_id AS speaker_id, start_s, end_s, text FROM transcript_segments WHERE source_id=?"
+        params: list[Any] = [sid]
+        if speaker_id is not None:
+            q += " AND source_speaker_id=?"; params.append(speaker_id)
+        src = db.row(conn, "SELECT transcript_status, transcript_language, transcript_info FROM sources WHERE id=?", (sid,))
+        if not src:
+            raise HTTPException(404)
+        return {"status": src["transcript_status"], "language": src["transcript_language"],
+                "info": json.loads(src["transcript_info"]) if src["transcript_info"] else None,
+                "lines": db.rows(conn, q + " ORDER BY start_s", tuple(params))}
+
+    @app.post("/api/sources/{sid}/transcribe")
+    def transcribe_now(sid: int, force: bool = False, conn=Depends(get_conn)):
+        """Queue Whisper for this recording (force = run it again even if words are cached)."""
+        if not db.row(conn, "SELECT id FROM sources WHERE id=? AND status='done'", (sid,)):
+            raise HTTPException(400, "the recording must be processed first")
+        if force:
+            try:
+                transcribe.raw_path(sid).unlink(missing_ok=True)
+            except OSError:
+                pass
+        with db.tx(conn):
+            conn.execute("UPDATE sources SET transcript_status='queued' WHERE id=?", (sid,))
+            jid = worker.enqueue(conn, sid, "transcribe", priority=-2, dedupe=True)
+        return {"job_id": jid}
+
+    @app.post("/api/transcribe/backfill")
+    def transcribe_backfill(conn=Depends(get_conn)):
+        """Queue every processed recording that has no transcript yet."""
+        ids = [r["id"] for r in conn.execute("SELECT id FROM sources WHERE status='done' AND incognito=0 AND (transcript_status IS NULL OR transcript_status='failed')")]
+        with db.tx(conn):
+            for sid in ids:
+                conn.execute("UPDATE sources SET transcript_status='queued' WHERE id=?", (sid,))
+                worker.enqueue(conn, sid, "transcribe", priority=-3, dedupe=True)
+        return {"queued": len(ids)}
+
+    @app.get("/api/transcripts/search")
+    def transcripts_search(q: str, limit: int = 50, conn=Depends(get_conn)):
+        return {"hits": transcribe.search(conn, q, limit)}
 
     @app.get("/api/sources/{sid}/audio")
     def source_audio(sid: int, conn=Depends(get_conn)):
@@ -695,12 +743,17 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 "SELECT DISTINCT person_id FROM source_speakers WHERE source_id=? AND person_id IS NOT NULL", (sid,))]
             clips = [r["clip_path"] for r in conn.execute("SELECT clip_path FROM source_speakers WHERE source_id=?", (sid,))]
             conn.execute("DELETE FROM prints WHERE source_id=?", (sid,))
+            conn.execute("DELETE FROM transcript_segments WHERE source_id=?", (sid,))
             conn.execute("DELETE FROM source_speakers WHERE source_id=?", (sid,))
             conn.execute("UPDATE jobs SET status='cancelled' WHERE source_id=? AND status='queued'", (sid,))
             conn.execute("DELETE FROM sources WHERE id=?", (sid,))
             for p in pids:
                 delete_empty_provisional(conn, p)
             db.bump_prints_version(conn)
+        try:
+            transcribe.raw_path(sid).unlink(missing_ok=True)
+        except OSError:
+            pass
         for p in (s["orig_path"], s["wav_path"]):
             if p and Path(p).exists():
                 try:

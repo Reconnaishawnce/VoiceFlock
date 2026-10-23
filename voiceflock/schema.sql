@@ -32,7 +32,10 @@ CREATE TABLE IF NOT EXISTS sources (
   feed_id INTEGER,
   review INTEGER NOT NULL DEFAULT 0,        -- 1 = the user wants to label the voices in this recording
   notes TEXT,
-  stills_info TEXT
+  stills_info TEXT,
+  transcript_status TEXT,                   -- NULL | queued | running | done | failed
+  transcript_language TEXT,
+  transcript_info TEXT                      -- JSON {words, segments, model} or {error}
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -83,6 +86,7 @@ CREATE TABLE IF NOT EXISTS source_speakers (
   review_status TEXT,                      -- pending | done | skipped | NULL
   notes TEXT,
   ignored INTEGER NOT NULL DEFAULT 0,      -- 1 = not a voice (noise, laughter, crosstalk): never matched, never a print
+  name_hints TEXT,                         -- JSON [{name, score}] names spoken around this voice's turns (from the transcript)
   embedding BLOB,
   person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
   assignment TEXT,                         -- auto | confirmed | enrolled | named | NULL
@@ -196,3 +200,26 @@ CREATE TABLE IF NOT EXISTS person_groups (
   group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
   PRIMARY KEY (person_id, group_id)
 );
+
+-- Transcript lines (one speaker, a few seconds each), from Whisper words attributed to diarized turns.
+CREATE TABLE IF NOT EXISTS transcript_segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  source_speaker_id INTEGER REFERENCES source_speakers(id) ON DELETE SET NULL,
+  start_s REAL NOT NULL,
+  end_s REAL NOT NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_transcript_source ON transcript_segments(source_id, start_s);
+CREATE INDEX IF NOT EXISTS idx_transcript_speaker ON transcript_segments(source_speaker_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(text, content='transcript_segments', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS transcript_ai AFTER INSERT ON transcript_segments BEGIN
+  INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS transcript_ad AFTER DELETE ON transcript_segments BEGIN
+  INSERT INTO transcript_fts(transcript_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS transcript_au AFTER UPDATE ON transcript_segments BEGIN
+  INSERT INTO transcript_fts(transcript_fts, rowid, text) VALUES ('delete', old.id, old.text);
+  INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
+END;

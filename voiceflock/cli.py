@@ -109,6 +109,19 @@ def cmd_enroll(a):
     print(f"person #{pid} '{a.name}': +{n} prints")
 
 
+def cmd_transcribe(a):
+    from . import db, transcribe
+    db.init_db()
+    conn = db.connect()
+    if a.source == "all":
+        ids = [r["id"] for r in conn.execute("SELECT id FROM sources WHERE status='done' AND (transcript_status IS NULL OR transcript_status!='done' OR ?)", (int(a.force),))]
+    else:
+        ids = [int(a.source)]
+    for sid in ids:
+        res = transcribe.transcribe_source(conn, sid, lambda st, f: print(f"\r  [{sid}] {st} {f*100:.0f}%", end="", flush=True), force=a.force)
+        print(f"\r  [{sid}] {res['segments']} lines, {res['words']} words, language {res['language']}")
+
+
 def cmd_calibrate(a):
     if a.from_decisions or not a.folder:
         from . import db, selfcal
@@ -302,6 +315,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("clips", nargs="+")
     s.set_defaults(fn=cmd_enroll)
 
+    s = sub.add_parser("transcribe", help="transcribe a processed recording (or 'all') with Whisper and attribute words to voices")
+    s.add_argument("source", help="source id, or all")
+    s.add_argument("--force", action="store_true", help="run Whisper again even if raw words are cached")
+    s.set_defaults(fn=cmd_transcribe)
     s = sub.add_parser("calibrate", help="fit calibration from <folder>/<speaker>/<clips> (+ optional pairs.csv), or --from-decisions")
     s.add_argument("folder", nargs="?")
     s.add_argument("--from-decisions", action="store_true", help="fit from your own Confirm/Name/Reject decisions instead of a folder")

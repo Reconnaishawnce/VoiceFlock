@@ -95,6 +95,13 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "help": "A file or folder, e.g. C:\\Users\\you\\Dropbox\\VoiceFlock. The library JSON is rewritten there whenever voices or alerts change; share that file's link and the phone fetches it on its own."},
     "alert_speak_on_laptop": {"default": True, "type": "bool", "group": "Alerts",
         "label": "Laptop Live mode plays alarm + speaks", "help": "Uses the browser's speech engine; the phone always does."},
+    # --- transcripts ---
+    "transcribe_auto": {"default": "auto", "type": "str", "group": "Transcripts",
+        "label": "Transcribe new recordings", "help": "auto = when a GPU is present · always · never. Manual: the Transcribe button on a recording."},
+    "transcribe_model": {"default": "auto", "type": "str", "group": "Transcripts",
+        "label": "Whisper model", "help": "auto = large-v3-turbo on a GPU, base on CPU. Or tiny | base | small | medium | large-v3 | large-v3-turbo."},
+    "transcribe_language": {"default": "", "type": "str", "group": "Transcripts",
+        "label": "Language", "help": "ISO code such as en; empty = detect per recording."},
     # --- live listening ---
     "live_window_s": {"default": 4.0, "type": "float", "group": "Live",
         "label": "Live window (s of speech)", "help": "Seconds of actual speech (pauses skipped) embedded at a time in Live mode."},

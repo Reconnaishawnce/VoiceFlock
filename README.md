@@ -287,6 +287,19 @@ smoothed over consecutive speech windows, and alerted when a flagged person is a
 
 Check the recording-consent law where you are before listening to people continuously.
 
+## Transcripts
+
+Each processed recording can be transcribed on the laptop with Whisper (`faster-whisper`; large-v3-turbo on
+a GPU, base on CPU, set under Settings → Transcripts). Words carry timestamps and are attributed to the
+diarized voice whose turn they fall in, so the recording page shows a transcript that follows playback,
+click any line to jump there, search within it, and open a voice's side panel to read what they said.
+Names spoken around a turn ("the chair recognizes Senator Warren", "my name is …", "thank you, Senator X")
+become **name hints**: one-click suggestions next to the name box. The Library search also searches every
+transcript ("Said in recordings"). *Transcribe new recordings* defaults to `auto` = only when a GPU is
+present; press **Transcribe** on any recording otherwise, or Settings → *Transcribe existing recordings*.
+Raw words are cached in `data/transcripts/` so a reprocess only redoes the attribution.
+Command line: `voiceflock transcribe <id|all> [--force]`.
+
 ## Calibration and noise
 
 **Calibrate from your decisions.** Every Confirm, Name, Enroll and Reject is a labelled trial. Settings →

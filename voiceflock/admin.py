@@ -100,7 +100,7 @@ def wipe_library(conn, keep_settings: bool = True) -> dict:
     counts = {}
     with db.tx(conn):
         conn.execute("UPDATE jobs SET status='cancelled' WHERE status IN ('queued','running')")
-        for t in ("matches", "segments", "prints", "source_speakers", "person_groups", "groups", "persons", "feed_items", "sources", "jobs", "cohort"):
+        for t in ("transcript_segments", "matches", "segments", "prints", "source_speakers", "person_groups", "groups", "persons", "feed_items", "sources", "jobs", "cohort"):
             counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             conn.execute(f"DELETE FROM {t}")
         conn.execute("DELETE FROM feeds")
@@ -109,7 +109,7 @@ def wipe_library(conn, keep_settings: bool = True) -> dict:
             conn.execute("DELETE FROM calibrations")
         conn.execute("DELETE FROM sqlite_sequence")
         db.bump_prints_version(conn)
-    for d in (config.AUDIO_DIR, config.ORIG_DIR, config.CLIP_DIR, config.DATA_DIR / "stills"):
+    for d in (config.AUDIO_DIR, config.ORIG_DIR, config.CLIP_DIR, config.DATA_DIR / "stills", config.DATA_DIR / "transcripts"):
         if d.exists():
             for p in d.iterdir():
                 try:

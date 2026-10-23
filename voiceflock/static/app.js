@@ -254,6 +254,10 @@ async function loadLibrary() {
     const okSources = j.sources.filter((s) => s.status !== "failed" || s.n_speakers);
     const failedSources = j.sources.filter((s) => s.status === "failed" && !s.n_speakers);
     if (failedSources.length) { $("#problems-box").classList.remove("hidden"); $("#problems-count").textContent = `(${failed.length + failedSources.length})`; $("#problems").innerHTML += failedSources.map((s) => `<div class="jobrow"><span class="pill failed">failed</span><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a><span class="muted" style="flex:1">${esc(s.error || "")}</span><button class="small" onclick="reprocess(${s.id})">retry</button><button class="small danger" onclick="deleteSource(${s.id})">delete</button></div>`).join(""); }
+    const qtxt = ($("#source-search")?.value || "").trim();
+    if (qtxt.length >= 3) api(`/api/transcripts/search?q=${encodeURIComponent(qtxt)}&limit=30`).then((r) => { const el = $("#tr-hits"); if (!el || ($("#source-search")?.value || "").trim() !== qtxt) return;
+      el.innerHTML = r.hits.length ? `<h3>Said in recordings <span class="muted" style="text-transform:none;letter-spacing:0">· ${r.hits.length} lines</span></h3>` + r.hits.map((h) => `<div class="tr-line" onclick="openSourceAt(${h.source_id}, ${h.start_s})"><span class="tr-t">${fmtT(h.start_s)}</span><span class="tr-who">${esc(h.person_name || h.label || "")}</span><span class="tr-x">${esc(h.snippet).replace(/\[/g, "<mark>").replace(/\]/g, "</mark>")} <span class="muted">· ${esc(h.source_name)}</span></span></div>`).join("") : ""; }).catch(() => {});
+    else { const el = $("#tr-hits"); if (el) el.innerHTML = ""; }
     $("#sources").innerHTML = okSources.length ? `<table><tr><th>Recording</th><th>Status</th><th>Length</th><th>Voices</th><th></th></tr>` + okSources.map((s) => `<tr>
       <td><a class="link" onclick="openSource(${s.id})">${esc(s.name)}</a>${s.incognito ? '<span class="pill">identify only</span>' : ""}${s.mode === "enroll" ? '<span class="pill">enroll</span>' : ""}${s.review ? '<span class="pill provisional">review</span>' : ""}</td>
       <td><span class="pill ${s.status}">${s.status}</span>${s.job && s.job.status === "running" ? ` <span class="muted">${Math.round(s.job.progress)}%</span>` : ""}</td>
@@ -277,19 +281,20 @@ async function loadSourceDetail(id) {
   try {
     const src = await api(`/api/sources/${id}`);
     const el = $("#lib-detail");
-    if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
-    el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]);
+    if (el.dataset.sig === JSON.stringify([src.status, src.n_speakers, src.transcript_status, src.transcript_lines, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]) && el.innerHTML) return; // nothing changed: keep players alive
+    el.dataset.sig = JSON.stringify([src.status, src.n_speakers, src.transcript_status, src.transcript_lines, src.speakers.map((s) => [s.person_id, s.assignment, s.ignored, s.review_status, s.candidates.map((c) => c.status)])]);
     const sameSource = STATE.src?.id === src.id;
     el.innerHTML = `<button class="back" onclick="back('library')">← Back</button><div class="card">${sourceView(src)}</div>`;
     el.classList.add("tab");
     STATE.src = src;
     // the side panel shows a speaker of this recording: redraw it with the fresh data (after naming, confirming, undo)
     if (sameSource && STATE.drawerSpeaker && !$("#drawer").classList.contains("hidden")) openSpeaker(STATE.drawerSpeaker, false);
+    loadTranscript(src);
     const cue = STATE.seekTo; STATE.seekTo = null;
     if (src.media_kind === "youtube") {
       await loadYT();
       YTP = new YT.Player(`yt-${src.id}`, { videoId: src.youtube_id, playerVars: { rel: 0, modestbranding: 1, playsinline: 1, start: cue != null ? Math.floor(cue) : undefined }, events: { onReady: () => { if (cue != null) { YTP.mute(); YTP.seekTo(cue, true); YTP.playVideo(); showUnmute(src.id, cue); } }, onStateChange: (e) => {
-        clearInterval(YT_TICK); if (e.data === 1) YT_TICK = setInterval(() => { const c = $(`#tl-${src.id} .cursor`); if (c && src.duration_s) c.style.left = (YTP.getCurrentTime() / src.duration_s) * 100 + "%"; }, 500); } } });
+        clearInterval(YT_TICK); if (e.data === 1) YT_TICK = setInterval(() => { const t = YTP.getCurrentTime(); const c = $(`#tl-${src.id} .cursor`); if (c && src.duration_s) c.style.left = (t / src.duration_s) * 100 + "%"; syncTranscript(src.id, t); }, 500); } } });
     } else { YTP = null; if (cue != null) setTimeout(() => seek(src.id, cue), 150); }
     if (cue != null) $("#lib-detail .player")?.scrollIntoView({ block: "start", behavior: "smooth" });
   } catch (e) { onErr(e); }
@@ -306,6 +311,7 @@ function sourceView(src) {
     <div class="q">${src.duration_s ? fmtT(src.duration_s) : ""} · ${src.n_speakers ?? "?"} voices · added ${esc((src.created_at || "").slice(0, 16).replace("T", " "))}${src.url ? ` · <a class="link" href="${esc(src.url)}" target="_blank">source ↗</a>` : ""}</div></div>${job}${err}
     ${player}${timeline(src)}
     <p class="muted" style="font-size:12px">Click a voice in the legend or a block on the timeline: the player jumps to them and a panel opens to name them, without leaving the video.${src.stills_info ? ` · stills: ${src.stills_info.kind === "error" || src.stills_info.kind === "none" ? `<span style="color:var(--warn)">${esc(src.stills_info.error || "none")}</span>` : `${src.stills_info.stills} from ${src.stills_info.kind}`}` : ""}</p>
+    ${transcriptBox(src)}
     <div class="inline" style="align-items:flex-start"><textarea class="notes" id="src-notes" placeholder="Notes for this recording: context, date, who was present, links… (saved when you click away)" onblur="saveSourceNotes(${src.id}, this.value)">${esc(src.notes || "")}</textarea></div>
     <div class="actions">
       ${src.status === "done" && !src.incognito ? `<button class="small primary" onclick="queueReview(${src.id})" title="Put every unnamed voice of this recording in the review queue">${src.review_pending ? `Review queue: ${src.review_pending} to do` : "Add voices to review queue"}</button>` : ""}
@@ -316,12 +322,75 @@ function sourceView(src) {
     </div>
     ${(src.speakers || []).map((sp, i) => speakerCard(sp, src, i)).join("") || (src.status === "done" ? '<p class="muted">No speakers passed the minimum speech length.</p>' : "")}`;
 }
+/* ---------------- transcript ---------------- */
+let TR = { sid: null, lines: [], follow: true, filter: null, q: "" };
+function transcriptBox(src) {
+  if (src.status !== "done" || src.incognito) return "";
+  const st = src.transcript_status, job = src.transcript_job;
+  let body;
+  if (st === "done" && src.transcript_lines) body = `<div class="tr-tools"><input id="tr-q" placeholder="search this transcript…" oninput="trFilter(${src.id}, this.value)"><label class="chk" style="margin:0"><input type="checkbox" id="tr-follow" ${TR.follow ? "checked" : ""} onchange="TR.follow=this.checked"> follow playback</label><span class="muted" id="tr-count"></span><button class="small" onclick="transcribeNow(${src.id}, true)" title="run Whisper again">Redo</button></div><div class="tr-box" id="tr-${src.id}">${skeleton(6)}</div>`;
+  else if (st === "queued" || st === "running" || (job && job.status === "running")) body = `<div class="muted">Transcribing… ${job && job.status === "running" ? `${esc(job.stage || "")} ${Math.round(job.progress || 0)}%` : "queued"}</div>`;
+  else if (st === "failed") body = `<div class="warnbox">Transcription failed: ${esc(src.transcript_info?.error || "")}</div><button class="small" onclick="transcribeNow(${src.id})">Try again</button>`;
+  else body = `<div class="actions"><button class="small primary" onclick="transcribeNow(${src.id})">Transcribe</button><span class="muted">Whisper on this machine (fast on a GPU). Words are attributed to each voice; names spoken around a turn become naming hints.</span></div>`;
+  const lang = src.transcript_language ? ` <span class="pill">${esc(src.transcript_language)}</span>` : "";
+  return `<details class="transcript" open><summary><b>Transcript</b>${lang} ${src.transcript_lines ? `<span class="muted">· ${src.transcript_lines} lines</span>` : ""}</summary>${body}</details>`;
+}
+async function loadTranscript(src) {
+  if (src.transcript_status !== "done" || !$(`#tr-${src.id}`)) return;
+  try {
+    if (TR.sid !== src.id) { const j = await api(`/api/sources/${src.id}/transcript`); TR = { sid: src.id, lines: j.lines, follow: TR.follow, filter: null, q: "" }; }
+    renderTranscript(src);
+  } catch (e) { onErr(e); }
+}
+function trName(src, sid) { const i = (src.speakers || []).findIndex((x) => x.id === sid); const sp = src.speakers[i]; return { name: sp ? (sp.person?.name || sp.label) : "—", color: i >= 0 ? COLORS[i % COLORS.length] : "#555" }; }
+function renderTranscript(src) {
+  const box = $(`#tr-${src.id}`); if (!box) return;
+  const q = TR.q.toLowerCase();
+  const lines = TR.lines.filter((l) => (TR.filter == null || l.speaker_id === TR.filter) && (!q || l.text.toLowerCase().includes(q)));
+  const cnt = $("#tr-count"); if (cnt) cnt.textContent = (TR.filter != null || q) ? `${lines.length} of ${TR.lines.length} lines · ` : "";
+  if (TR.filter != null && cnt) cnt.innerHTML += `<a class="link" onclick="trFilterSpeaker(${src.id}, null)">show everyone</a>`;
+  const mark = (t) => q ? esc(t).replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"), (m) => `<mark>${m}</mark>`) : esc(t);
+  let last = null;
+  box.innerHTML = lines.slice(0, 3000).map((l) => { const w = trName(src, l.speaker_id); const head = l.speaker_id !== last; last = l.speaker_id;
+    return `<div class="tr-line${head ? " head" : ""}" data-t="${l.start_s}" onclick="seek(${src.id}, ${l.start_s})"><span class="tr-t">${fmtT(l.start_s)}</span><span class="tr-who" style="color:${w.color}" onclick="event.stopPropagation();openSpeaker(${l.speaker_id})">${head ? esc(w.name) : ""}</span><span class="tr-x">${mark(l.text)}</span></div>`; }).join("") || `<div class="muted" style="padding:10px">No lines match.</div>`;
+}
+function trFilter(sid, v) { TR.q = v; if (STATE.src?.id === sid) renderTranscript(STATE.src); }
+function trFilterSpeaker(sid, spk) { TR.filter = spk; const q = $("#tr-q"); if (STATE.src?.id === sid) { renderTranscript(STATE.src); $(`#tr-${sid}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }); } }
+/** Highlight the line being played; called by the player tick (YouTube) and timeupdate (html media). */
+function syncTranscript(sid, t) {
+  if (TR.sid !== sid) return; const box = $(`#tr-${sid}`); if (!box) return;
+  const nodes = box.children; let lo = 0, hi = nodes.length - 1, cur = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (Number(nodes[mid].dataset.t) <= t) { cur = mid; lo = mid + 1; } else hi = mid - 1; }
+  const prev = box.querySelector(".now"); const el = cur >= 0 ? nodes[cur] : null;
+  if (prev === el) return; prev?.classList.remove("now");
+  if (el) { el.classList.add("now"); if (TR.follow) el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+}
+async function transcribeNow(sid, force = false) { try { await api(`/api/sources/${sid}/transcribe${force ? "?force=true" : ""}`, { method: "POST" }); toast(force ? "Re-transcribing" : "Transcription queued"); render(); } catch (e) { onErr(e); } }
+async function transcribeBackfill() { try { const r = await api("/api/transcribe/backfill", { method: "POST" }); toast(r.queued ? `Queued transcripts for ${r.queued} recordings` : "Everything is transcribed"); } catch (e) { onErr(e); } }
 function timeline(src) {
   if (!src.duration_s || !(src.speakers || []).length) return "";
   const d = src.duration_s;
   const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s});openSpeaker(${sp.id})"></div>`).join("")).join("");
   const legend = src.speakers.map((sp, i) => `<span class="link${sp.ignored ? " ignored" : ""}" onclick="openSpeaker(${sp.id}, true)" title="${sp.ignored ? "ignored (not a voice)" : "play this voice and open its panel"}"><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}${sp.ignored ? " ·  ignored" : ""}</span>`).join("");
   return `<div class="timeline" id="tl-${src.id}" onclick="seekFrac(${src.id}, event)">${segs}<div class="cursor" style="left:0"></div></div><div class="tl-legend">${legend}</div>`;
+}
+/** Names spoken around this voice's turns ("the chair recognizes Senator Warren"): one click fills the name box. */
+function hintChips(sp) {
+  const h = sp.name_hints || []; if (!h.length) return "";
+  return `<div class="hints"><span class="muted">Heard in the room:</span> ${h.map((x) => `<button class="small" onclick="useHint(this)" data-name="${esc(x.name)}" title="score ${x.score}">${esc(x.name)}</button>`).join("")}</div>`;
+}
+/** Put a name hint into the nearest name box (side panel or speaker card). */
+function useHint(btn) {
+  const scope = btn.closest(".namebox") || btn.closest("#drawer-body") || btn.closest(".spk") || document;
+  const input = scope.querySelector("input[id^=nm-]"); if (!input) return;
+  input.value = btn.dataset.name; input.focus();
+}
+function saidBox(src, sp) {
+  if (TR.sid !== src?.id) return "";
+  const mine = TR.lines.filter((l) => l.speaker_id === sp.id); if (!mine.length) return "";
+  const pick = mine.slice().sort((a, b) => (b.end_s - b.start_s) - (a.end_s - a.start_s)).slice(0, 6).sort((a, b) => a.start_s - b.start_s);
+  return `<h3>What they said <span class="muted" style="text-transform:none;letter-spacing:0">· ${mine.length} lines · <a class="link" onclick="trFilterSpeaker(${src.id}, ${sp.id})">show all in transcript</a></span></h3>
+    <div class="said">${pick.map((l) => `<div class="tr-line" onclick="seek(${src.id}, ${l.start_s})"><span class="tr-t">${fmtT(l.start_s)}</span><span class="tr-x">${esc(l.text.length > 220 ? l.text.slice(0, 220) + "…" : l.text)}</span></div>`).join("")}</div>`;
 }
 /* ---------------- side panel for one voice ---------------- */
 function openSpeaker(id, play = false) {
@@ -341,8 +410,10 @@ function openSpeaker(id, play = false) {
     <div class="namebox">
       <div class="nb-label">${unnamed ? "Who is this?" : "Rename or reassign"}</div>
       <div class="inline" style="margin:0"><input placeholder="${unnamed ? "Type a name and press Enter" : sp.person.name}" list="person-names" id="nm-${sp.id}" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)"><button class="primary" onclick="nameSpeaker(${sp.id}, this)">${unnamed ? "Name" : "Save"}</button></div>
+      ${hintChips(sp)}
       <div class="muted" style="font-size:12px;margin-top:6px">${sp.person && sp.person.kind === "provisional" ? `Names <b>${esc(sp.person.name)}</b> everywhere it was heard. ` : ""}An existing name merges them with that person.</div>
     </div>
+    ${saidBox(src, sp)}
     <div class="actions">${sp.longest ? `<button class="small" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ play longest turn (${fmtT(sp.longest.start_s)}, ${sp.longest.seconds}s)</button>` : ""}</div>
     <div class="chips" style="margin:6px 0">${(sp.segments || []).slice(0, 14).map((g) => `<button onclick="seek(${src.id}, ${g.start_s})">${fmtT(g.start_s)}</button>`).join("")}${sp.segments.length > 14 ? `<span class="muted">+${sp.segments.length - 14}</span>` : ""}</div>
     ${(sp.stills || []).length ? `<div class="strip">${sp.stills.map((x) => `<img class="thumb" loading="lazy" src="${esc(x.url)}" title="jump to ${fmtT(x.t)}" onclick="seek(${src.id}, ${x.t})">`).join("")}</div>` : ""}
@@ -375,7 +446,7 @@ function seek(sid, t) {
   a.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 function seekFrac(sid, ev) { const tl = $(`#tl-${sid}`); if (!tl) return; const r = tl.getBoundingClientRect(); const dur = YTP && YTP.getDuration ? YTP.getDuration() : $(`#aud-${sid}`)?.duration; if (!dur) return; seek(sid, ((ev.clientX - r.left) / r.width) * dur); }
-document.addEventListener("timeupdate", (e) => { const a = e.target; if (!(a instanceof HTMLMediaElement) || !a.id.startsWith("aud-")) return; const c = $(`#tl-${a.id.slice(4)} .cursor`); if (c && a.duration) c.style.left = (a.currentTime / a.duration) * 100 + "%"; }, true);
+document.addEventListener("timeupdate", (e) => { const a = e.target; if (!(a instanceof HTMLMediaElement) || !a.id.startsWith("aud-")) return; const sid = Number(a.id.slice(4)); const c = $(`#tl-${sid} .cursor`); if (c && a.duration) c.style.left = (a.currentTime / a.duration) * 100 + "%"; syncTranscript(sid, a.currentTime); }, true);
 
 function qualityWarning(sp) {
   const w = [];
@@ -432,7 +503,7 @@ function speakerCard(sp, src, idx = 0) {
     <div id="cands-${sp.id}">${candidateTable(sp)}</div>
     <div class="actions">
       <input placeholder="${sp.person ? "Rename / reassign…" : "Who is this? Type a name…"}" list="person-names" id="nm-${sp.id}" style="max-width:260px" onkeydown="if(event.key==='Enter')nameSpeaker(${sp.id}, this)">
-      <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id}, this)">${sp.person ? "Name" : "Add to library"}</button>
+      <button class="small ${sp.person ? "" : "primary"}" onclick="nameSpeaker(${sp.id}, this)">${sp.person ? "Name" : "Add to library"}</button>${hintChips(sp)}
       ${sp.person_id ? `<button class="small" onclick="unassign(${sp.id})">Unassign / undo</button>` : ""}
       <button class="small" onclick="ignoreSpeaker(${sp.id})" title="noise, laughter, crosstalk: drop it from matching for good">Not a voice</button>
     </div></div>`;
@@ -778,7 +849,7 @@ async function loadSettings() {
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
     renderSelftest(); renderPhone(); renderVersion();
     const st = await api("/api/stats");
-    $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
+    $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <button class="small" onclick="transcribeBackfill()">Transcribe existing recordings (${st.untranscribed} left)</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;
     renderCalibration(st);
   } catch (e) { onErr(e); }

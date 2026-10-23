@@ -25,6 +25,7 @@ dependencies = [
   "onnx>=1.16",
   "onnxscript>=0.3",
   "onnxruntime>=1.18",
+  "faster-whisper>=1.1",
 ]
 
 [project.optional-dependencies]
