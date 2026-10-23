@@ -100,7 +100,7 @@ def wipe_library(conn, keep_settings: bool = True) -> dict:
     counts = {}
     with db.tx(conn):
         conn.execute("UPDATE jobs SET status='cancelled' WHERE status IN ('queued','running')")
-        for t in ("sightings", "transcript_segments", "matches", "segments", "prints", "source_speakers", "person_groups", "groups", "persons", "feed_items", "sources", "jobs", "cohort"):
+        for t in ("distinct_pairs", "sightings", "transcript_segments", "matches", "segments", "prints", "source_speakers", "person_groups", "groups", "persons", "feed_items", "sources", "jobs", "cohort"):
             counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             conn.execute(f"DELETE FROM {t}")
         conn.execute("DELETE FROM feeds")

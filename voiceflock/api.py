@@ -64,6 +64,11 @@ class MembersIn(BaseModel):
     person_ids: list[int]
 
 
+class PairIn(BaseModel):
+    a_id: int
+    b_id: int
+
+
 class SightingIn(BaseModel):
     at_ms: int | None = None
     person_id: int | None = None
@@ -943,6 +948,13 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         conn.execute("DELETE FROM matches WHERE person_id=? AND source_speaker_id IN"
                      " (SELECT source_speaker_id FROM matches WHERE person_id=?)", (from_id, into_id))
         conn.execute("UPDATE matches SET person_id=? WHERE person_id=?", (into_id, from_id))
+        # "different people" marks follow the merged voice (and a mark between the two being merged is dropped)
+        for r in conn.execute("SELECT a_id, b_id FROM distinct_pairs WHERE a_id=? OR b_id=?", (from_id, from_id)).fetchall():
+            other = r["b_id"] if r["a_id"] == from_id else r["a_id"]
+            conn.execute("DELETE FROM distinct_pairs WHERE a_id=? AND b_id=?", (r["a_id"], r["b_id"]))
+            if other != into_id:
+                lo, hi = (other, into_id) if other < into_id else (into_id, other)
+                conn.execute("INSERT OR IGNORE INTO distinct_pairs(a_id, b_id) VALUES(?,?)", (lo, hi))
         conn.execute("DELETE FROM persons WHERE id=?", (from_id,))
         gallery.prune_prints(conn, into_id, int(config.Settings(conn)["max_prints_per_person"]))
         db.bump_prints_version(conn)
@@ -1098,37 +1110,94 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             p["heard_in"] = person_sources(conn, p["id"], limit=10)
         return {"voices": ps}
 
+    def _pair_key(a: int, b: int) -> tuple[int, int]:
+        return (a, b) if a < b else (b, a)
+
+    def _side(conn, pid: int, g) -> dict:
+        info = g.persons.get(pid, {})
+        row = db.row(conn, "SELECT id, name, kind, alert, created_at, notes FROM persons WHERE id=?", (pid,)) or {"id": pid, "name": info.get("name"), "kind": info.get("kind")}
+        d = dict(row)
+        d["n_prints"] = int((g.person_ids == pid).sum())
+        d["n_sources"] = conn.execute("SELECT COUNT(DISTINCT source_id) FROM source_speakers WHERE person_id=?", (pid,)).fetchone()[0]
+        d["speech_seconds"] = conn.execute("SELECT COALESCE(SUM(speech_seconds),0) FROM source_speakers WHERE person_id=?", (pid,)).fetchone()[0]
+        d["glyph"] = person_glyph(conn, pid)
+        hi = person_sources(conn, pid, limit=12)
+        hi.sort(key=lambda h: -(h.get("speech_seconds") or 0))
+        d["heard_in"] = hi[:4]
+        best = next((h for h in hi if h.get("clip_url")), None)
+        d["clip_url"] = best["clip_url"] if best else None
+        d["clip_source"] = best["name"] if best else None
+        d["still_url"] = next((h["still_url"] for h in hi if h.get("still_url")), None)
+        d["still_source_id"] = next((h["id"] for h in hi if h.get("still_url")), None)
+        d["still_watch_at"] = next((h.get("watch_at") for h in hi if h.get("still_url")), None)
+        return d
+
     @app.get("/api/voices/merge_suggestions")
-    def merge_suggestions(limit: int = 50, conn=Depends(get_conn)):
-        """Pairs of voices that are probably the same person (incremental clustering can split one person
-        across several unnamed voices when the mic or room changes)."""
+    def merge_suggestions(limit: int = 40, conn=Depends(get_conn)):
+        """Pairs of voices that may be the same person, ready for side-by-side review: voice similarity (incremental
+        clustering splits one person across unnamed voices when the mic or room changes), and near-identical names
+        among known people. Pairs marked 'different people' are left out."""
         import numpy as np
+        from .suggest import _same as same_name
         g = app.state.gcache.get(conn)
         settings = config.Settings(conn)
         thr = float(settings["unknown_cluster_threshold"])
+        distinct = {(_pair_key(r["a_id"], r["b_id"])) for r in conn.execute("SELECT a_id, b_id FROM distinct_pairs")}
         if len(g) == 0:
-            return {"pairs": []}
+            return {"pairs": [], "threshold": thr, "distinct": []}
         means: dict[int, list] = {}
         for i, pid in enumerate(g.person_ids):
             means.setdefault(int(pid), []).append(g.emb[i])
         pids = [p for p in means if p in g.persons]
         M = gallery.l2n(np.stack([np.mean(np.stack(means[p]), axis=0) for p in pids]))
-        pairs = []
+        found: dict[tuple[int, int], dict] = {}
         for a in range(len(pids)):
             for b in range(a + 1, len(pids)):
+                key = _pair_key(pids[a], pids[b])
+                if key in distinct:
+                    continue
                 ka, kb = g.persons[pids[a]]["kind"], g.persons[pids[b]]["kind"]
-                if ka == "named" and kb == "named":
-                    continue  # two known people are never auto-suggested
                 raw, norm, prob = g.score_pair(M[a], M[b])
-                if prob >= thr:
-                    pairs.append({"a": {"id": pids[a], "name": g.persons[pids[a]]["name"], "kind": ka},
-                                  "b": {"id": pids[b], "name": g.persons[pids[b]]["name"], "kind": kb},
-                                  "probability": prob, "raw_score": raw})
-        pairs.sort(key=lambda x: -x["probability"])
-        for pr in pairs[:limit]:
-            for side in ("a", "b"):
-                pr[side]["heard_in"] = person_sources(conn, pr[side]["id"], limit=3)
-        return {"pairs": pairs[:limit], "threshold": thr}
+                both_named = ka == "named" and kb == "named"
+                names_alike = both_named and same_name(g.persons[pids[a]]["name"], g.persons[pids[b]]["name"])
+                if prob >= thr and (not both_named or prob >= max(thr, 0.9)):
+                    reason = "voices match" if not both_named else "two known people whose voices match"
+                elif names_alike and prob >= 0.4:
+                    reason = "similar names"
+                else:
+                    continue
+                found[key] = {"ids": key, "probability": prob, "raw_score": raw, "reason": reason, "names_alike": names_alike}
+        pairs = sorted(found.values(), key=lambda x: -x["probability"])[:limit]
+        for pr in pairs:
+            a, b = pr.pop("ids")
+            sa, sb = _side(conn, a, g), _side(conn, b, g)
+            # keep the named one, else the one with more speech
+            if (sb["kind"] == "named") > (sa["kind"] == "named") or (sa["kind"] == sb["kind"] and (sb["speech_seconds"] or 0) > (sa["speech_seconds"] or 0)):
+                sa, sb = sb, sa
+            pr["a"], pr["b"] = sa, sb
+            together = db.rows(conn, "SELECT s.id, s.name FROM sources s WHERE s.id IN (SELECT source_id FROM source_speakers WHERE person_id=?)"
+                                     " AND s.id IN (SELECT source_id FROM source_speakers WHERE person_id=?) AND s.status!='deleted' LIMIT 5", (sa["id"], sb["id"]))
+            pr["together"] = together
+        return {"pairs": pairs, "threshold": thr,
+                "distinct": db.rows(conn, "SELECT d.a_id, d.b_id, d.created_at, pa.name AS a_name, pb.name AS b_name FROM distinct_pairs d"
+                                          " JOIN persons pa ON pa.id=d.a_id JOIN persons pb ON pb.id=d.b_id ORDER BY d.created_at DESC LIMIT 100")}
+
+    @app.post("/api/voices/distinct")
+    def mark_distinct(body: PairIn, conn=Depends(get_conn)):
+        """These two are different people: never suggest merging them again."""
+        a, b = _pair_key(body.a_id, body.b_id)
+        if a == b or not db.row(conn, "SELECT 1 AS x FROM persons WHERE id=?", (a,)) or not db.row(conn, "SELECT 1 AS x FROM persons WHERE id=?", (b,)):
+            raise HTTPException(400, "two existing, different people required")
+        with db.tx(conn):
+            conn.execute("INSERT OR IGNORE INTO distinct_pairs(a_id, b_id) VALUES(?,?)", (a, b))
+        return {"a_id": a, "b_id": b}
+
+    @app.delete("/api/voices/distinct/{a_id}/{b_id}")
+    def unmark_distinct(a_id: int, b_id: int, conn=Depends(get_conn)):
+        a, b = _pair_key(a_id, b_id)
+        with db.tx(conn):
+            conn.execute("DELETE FROM distinct_pairs WHERE a_id=? AND b_id=?", (a, b))
+        return {"ok": True}
 
     # ---------------------------------------------------------------- speakers / matches
 

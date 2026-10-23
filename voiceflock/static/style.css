@@ -235,3 +235,14 @@ details.transcript { margin-top:12px; }
 @media (max-width:760px) { .tr-line { grid-template-columns:50px 1fr; } .tr-who { grid-column:2; } .tr-x { grid-column:1 / -1; } }
 .why { margin-top:6px; font-size:12px; color:var(--muted); } .why b { color:var(--fg-2); font-weight:500; }
 .sighting .title { display:flex; gap:8px; align-items:center; } .timeline-list { max-height:360px; overflow:auto; }
+
+/* ---------- merge review ---------- */
+.mergecard { background:var(--panel2); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin:12px 0; animation:page .3s var(--ease) both; }
+.mc-mid { display:flex; gap:12px; align-items:baseline; margin-bottom:8px; }
+.mc-sides { display:grid; grid-template-columns:1fr 40px 1fr; gap:10px; align-items:start; }
+.mc-vs { text-align:center; color:var(--muted); font-family:var(--display); font-size:18px; padding-top:40px; }
+.ms { min-width:0; } .ms-head { display:flex; gap:10px; align-items:center; margin-bottom:8px; } .ms-head .sub { margin-top:2px; }
+.ms-still { width:100%; max-width:320px; height:auto; aspect-ratio:16/9; object-fit:cover; display:block; margin:6px 0; }
+.ms-still.none { display:flex; align-items:center; justify-content:center; background:var(--bg-2); border:1px dashed var(--line-2); border-radius:8px; color:var(--muted); font-size:12px; height:90px; max-width:320px; }
+.ms audio { max-width:100%; }
+@media (max-width:760px) { .mc-sides { grid-template-columns:1fr; } .mc-vs { display:none; } }

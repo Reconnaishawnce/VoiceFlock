@@ -245,3 +245,38 @@ def test_sightings_timeline(client, conn):
     assert len(p["sightings"]) == 2
     h = client.get("/api/health").json()
     assert "tailscale" in h and "installed" in h["tailscale"] and isinstance(h["port"], int)
+
+
+def test_merge_review_distinct_pairs_and_name_lookalikes(client, conn):
+    from tests.test_speed_features import speaker_cluster
+    settings = config.Settings(conn); settings.set("cohort_auto", False)
+    rng = np.random.default_rng(5)
+    c = rand_unit(rng)
+    u1 = conn.execute("INSERT INTO persons(name, kind) VALUES('Unknown Voice 1', 'provisional')").lastrowid
+    u2 = conn.execute("INSERT INTO persons(name, kind) VALUES('Unknown Voice 2', 'provisional')").lastrowid
+    w1 = conn.execute("INSERT INTO persons(name, kind) VALUES('Warren', 'named')").lastrowid
+    w2 = conn.execute("INSERT INTO persons(name, kind) VALUES('Elizabeth Warren', 'named')").lastrowid
+    gallery.add_prints(conn, u1, None, None, c, speaker_cluster(rng, c, 2), "auto-cluster")
+    gallery.add_prints(conn, u2, None, None, speaker_cluster(rng, c, 1)[0], [], "auto-cluster")
+    d = rand_unit(rng)
+    gallery.add_prints(conn, w1, None, None, d, [], "cli")
+    gallery.add_prints(conn, w2, None, None, speaker_cluster(rng, d, 1)[0], [], "cli")   # same voice, two names
+    j = client.get("/api/voices/merge_suggestions").json()
+    names = {(p["a"]["name"], p["b"]["name"]): p for p in j["pairs"]}
+    assert ("Unknown Voice 1", "Unknown Voice 2") in names
+    pw = next(p for p in j["pairs"] if {p["a"]["name"], p["b"]["name"]} == {"Warren", "Elizabeth Warren"})
+    assert pw["names_alike"] is True and pw["reason"] in ("similar names", "two known people whose voices match")
+    assert all(k in pw["a"] for k in ("glyph", "n_prints", "heard_in", "clip_url", "still_url", "speech_seconds")) and "together" in pw
+    # keep the unnamed pair apart
+    assert client.post("/api/voices/distinct", json={"a_id": u2, "b_id": u1}).json() == {"a_id": min(u1, u2), "b_id": max(u1, u2)}
+    j = client.get("/api/voices/merge_suggestions").json()
+    assert not any({p["a"]["id"], p["b"]["id"]} == {u1, u2} for p in j["pairs"]) and j["distinct"][0]["a_name"] == "Unknown Voice 1"
+    # undo
+    client.delete(f"/api/voices/distinct/{u1}/{u2}")
+    assert any({p["a"]["id"], p["b"]["id"]} == {u1, u2} for p in client.get("/api/voices/merge_suggestions").json()["pairs"])
+    # a distinct mark follows a merge: (u2 ≠ w1), then merge u2 into u1 -> (u1 ≠ w1)
+    client.post("/api/voices/distinct", json={"a_id": u2, "b_id": w1})
+    client.post(f"/api/persons/{u2}/merge", json={"into_id": u1})
+    rows = {(r[0], r[1]) for r in conn.execute("SELECT a_id, b_id FROM distinct_pairs")}
+    assert rows == {(min(u1, w1), max(u1, w1))}
+    assert client.post("/api/voices/distinct", json={"a_id": u1, "b_id": u1}).status_code == 400

@@ -330,6 +330,15 @@ Nothing is named automatically.
 Settings → *Name suggestions* shows whether OCR and the model are ready, and *Suggest names for all
 recordings* backfills the library. Each recording also has a *Suggest names* button.
 
+## Merge review (look-alikes)
+
+People → *Possible duplicates* is a side-by-side review: for each pair of voices that may be one person
+(voices above the clustering threshold, or two known people with near-identical names) you see both
+avatars, stats, a video still, a clip of each voice, where each was heard, and a warning when both appear as
+separate voices in the same recording. One tap: *Same person* (keeps the named or better-attested one; the
+other button keeps the opposite), *Different people* (the pair stays out of the review for good, undo under
+*Kept apart*), or *Skip*. "Different people" marks follow a voice when it is merged elsewhere.
+
 ## Calibration and noise
 
 **Calibrate from your decisions.** Every Confirm, Name, Enroll and Reject is a labelled trial. Settings →

@@ -241,3 +241,11 @@ CREATE TABLE IF NOT EXISTS sightings (
 );
 CREATE INDEX IF NOT EXISTS idx_sightings_at ON sightings(at_ms);
 CREATE INDEX IF NOT EXISTS idx_sightings_person ON sightings(person_id, at_ms);
+
+-- "These two are different people": keeps a pair out of the merge review for good (a_id < b_id).
+CREATE TABLE IF NOT EXISTS distinct_pairs (
+  a_id INTEGER NOT NULL,
+  b_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (a_id, b_id)
+);

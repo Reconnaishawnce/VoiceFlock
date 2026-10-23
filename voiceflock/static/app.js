@@ -701,9 +701,9 @@ async function loadPeople() {
     } else {
       const j = await api("/api/voices/merge_suggestions");
       $$("#people-seg button")[4].textContent = `Possible duplicates (${j.pairs.length})`;
-      el.innerHTML = j.pairs.length ? `<p class="muted">Different mics or rooms can split one person into several entries. Listen to both, then merge.</p>` + j.pairs.map((p) => `<div class="item"><div class="title"><a class="link" onclick="openPerson(${p.a.id})">${esc(p.a.name)}</a><span class="pill ${p.a.kind}">${p.a.kind === "named" ? "known" : "unnamed"}</span> ≈ <a class="link" onclick="openPerson(${p.b.id})">${esc(p.b.name)}</a><span class="pill ${p.b.kind}">${p.b.kind === "named" ? "known" : "unnamed"}</span> <span class="prob hi">${pct(p.probability)}</span></div>
-        <div class="row" style="margin:4px 0 0">${[p.a, p.b].map((x) => `<div class="col">${clip(x.heard_in[0]?.clip_url) || '<span class="muted">no clip</span>'}</div>`).join("")}</div>
-        <div class="actions"><button class="small primary" onclick="mergeInto(${p.a.kind === "named" ? p.b.id : p.a.id}, ${p.a.kind === "named" ? p.a.id : p.b.id})">Merge into ${esc(p.a.kind === "named" ? p.a.name : p.b.name)}</button>${p.a.kind !== "named" && p.b.kind !== "named" ? ` <button class="small" onclick="mergeInto(${p.b.id}, ${p.a.id})">Merge into ${esc(p.a.name)}</button>` : ""}</div></div>`).join("") : empty("No likely duplicates right now.");
+      el.innerHTML = `<p class="muted">Different mics or rooms can split one person into several entries, and one person can be named twice. Listen to both, look at the stills, then decide. Pairs you mark as different people stay apart.</p>
+        ${j.pairs.length ? j.pairs.map(mergeCard).join("") : empty("No likely duplicates right now.")}
+        ${j.distinct.length ? `<details><summary>Kept apart (${j.distinct.length})</summary>${j.distinct.map((d) => `<div class="item"><a class="link" onclick="openPerson(${d.a_id})">${esc(d.a_name)}</a> <span class="muted">≠</span> <a class="link" onclick="openPerson(${d.b_id})">${esc(d.b_name)}</a> <button class="small" onclick="unmarkDistinct(${d.a_id}, ${d.b_id})">undo</button></div>`).join("")}</details>` : ""}`;
     }
   } catch (e) { onErr(e); }
 }
@@ -712,7 +712,35 @@ async function namePerson(id, el) {
   try { await api(`/api/persons/${id}`, { method: "PATCH", body: { name } }); toast(`Named ${name}`); render(); loadStats(); } catch (e) { onErr(e); }
 }
 async function mergePerson(id) { const into = $(`#mg-${id}`).value; if (!into) return; mergeInto(id, Number(into)); }
-async function mergeInto(fromId, intoId) { if (!confirm("Merge? Prints and recordings move over; the other entry is deleted.")) return; try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); render(); loadStats(); } catch (e) { onErr(e); } }
+async function mergeInto(fromId, intoId, quiet = false) { if (!quiet && !confirm("Merge? Prints and recordings move over; the other entry is deleted.")) return; try { await api(`/api/persons/${fromId}/merge`, { method: "POST", body: { into_id: intoId } }); toast("Merged"); render(); loadStats(); } catch (e) { onErr(e); } }
+/** One side of the merge review: avatar, name, stats, a still, a clip, where they were heard. */
+function mergeSide(x) {
+  const color = x.kind === "named" ? "var(--s1)" : "var(--s3)";
+  return `<div class="ms">
+    <div class="ms-head">${glyphSvg(x.glyph, color, 40)}<div><a class="link" onclick="openPerson(${x.id})"><b>${esc(x.name)}</b></a><span class="pill ${x.kind}">${x.kind === "named" ? "known" : "unnamed"}</span>${x.alert ? ' <span class="bell on">🔔</span>' : ""}
+      <div class="sub">${x.n_sources} recording${x.n_sources === 1 ? "" : "s"} · ${fmtT(x.speech_seconds || 0)} of speech · ${x.n_prints} prints</div></div></div>
+    ${x.still_url ? `<img class="thumb ms-still" src="${esc(x.still_url)}" onclick="openSourceAt(${x.still_source_id}, ${x.still_watch_at ?? 0})" title="open the recording at this moment">` : `<div class="ms-still none">no video still</div>`}
+    ${x.clip_url ? `<div class="turn">their voice in ${esc(x.clip_source || "")}</div>${clip(x.clip_url)}` : '<div class="muted">no clip</div>'}
+    <div class="sub">${(x.heard_in || []).map((h) => `<a class="link" onclick="openSourceAt(${h.id}, ${h.watch_at ?? 0})">${esc(h.name)}</a>`).join(", ") || "—"}</div>
+  </div>`;
+}
+function mergeCard(p) {
+  const pr = p.probability;
+  const why = p.reason === "similar names" ? `similar names · voices ${pct(pr)} alike` : `voices ${pct(pr)} alike`;
+  const warn = p.together.length ? `<div class="warnbox">Both appear in ${p.together.length === 1 ? `<a class="link" onclick="openSource(${p.together[0].id})">${esc(p.together[0].name)}</a>` : p.together.length + " recordings"} as separate voices, which usually means two different people (or one person split by the diarizer).</div>` : "";
+  return `<div class="mergecard" id="mc-${p.a.id}-${p.b.id}">
+    <div class="mc-mid"><div class="prob ${pr >= 0.9 ? "hi" : "mid"}" style="font-size:22px">${pct(pr)}</div><div class="muted">${why}</div></div>
+    <div class="mc-sides">${mergeSide(p.a)}<div class="mc-vs">vs</div>${mergeSide(p.b)}</div>
+    ${warn}
+    <div class="actions">
+      <button class="primary" onclick="mergeInto(${p.b.id}, ${p.a.id}, true)">Same person · keep “${esc(p.a.name)}”</button>
+      <button onclick="mergeInto(${p.a.id}, ${p.b.id}, true)">keep “${esc(p.b.name)}” instead</button>
+      <button onclick="markDistinct(${p.a.id}, ${p.b.id})">Different people</button>
+      <button class="small" onclick="$('#mc-${p.a.id}-${p.b.id}').remove()">Skip for now</button>
+    </div></div>`;
+}
+async function markDistinct(a, b) { try { await api("/api/voices/distinct", { method: "POST", body: { a_id: a, b_id: b } }); toast("Kept apart"); render(); } catch (e) { onErr(e); } }
+async function unmarkDistinct(a, b) { try { await api(`/api/voices/distinct/${a}/${b}`, { method: "DELETE" }); toast("Back in the review"); render(); } catch (e) { onErr(e); } }
 async function deletePerson(id) { if (!confirm("Delete this voice and all its prints?")) return; try { await api(`/api/persons/${id}`, { method: "DELETE" }); toast("Deleted"); go("people"); loadStats(); } catch (e) { onErr(e); } }
 async function acceptPerson(id) { try { const p = await api(`/api/persons/${id}/accept`, { method: "POST" }); toast(`Kept as ${p.name}`); render(); loadStats(); } catch (e) { onErr(e); } }
 async function savePersonNotes(id, v) { try { await api(`/api/persons/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
