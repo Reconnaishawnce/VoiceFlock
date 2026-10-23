@@ -72,7 +72,9 @@ def prepare_source(conn: sqlite3.Connection, source: dict, progress: Progress) -
             orig = audio.download_url(source["url"], out_dir, progress=lambda f: progress("downloading", f))
             conn.execute("UPDATE sources SET orig_path=?, original_filename=? WHERE id=?", (str(orig), orig.name, sid))
             if not source["name"] or source["name"] == source["url"]:
-                conn.execute("UPDATE sources SET name=? WHERE id=?", (orig.stem.replace("_", " "), sid))
+                import re as _re
+                pretty = _re.sub(r"\s*\[[\w-]{11}\]$", "", orig.stem.replace("_", " ")).strip() or orig.stem
+                conn.execute("UPDATE sources SET name=? WHERE id=?", (pretty, sid))
         else:
             raise audio.AudioError("source file is missing")
     wav_path = config.AUDIO_DIR / f"{sid}.wav"

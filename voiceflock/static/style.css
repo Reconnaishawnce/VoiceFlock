@@ -101,3 +101,5 @@ details { border-top:1px solid var(--border); margin-top:12px; padding-top:8px; 
 .thumb { width:128px; height:72px; object-fit:cover; border-radius:6px; cursor:pointer; flex:0 0 128px; background:#000; }
 
 .strip { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; } .strip .thumb { width:160px; height:90px; flex:0 0 160px; }
+
+.spk.flash { outline:2px solid var(--acc); transition:outline .2s; } .tl-legend .link { cursor:pointer; text-decoration:none; } .tl-legend .link:hover { color:var(--fg); }

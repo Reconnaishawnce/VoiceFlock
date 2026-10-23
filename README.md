@@ -280,8 +280,15 @@ Check the recording-consent law where you are before listening to people continu
 
 ## Updating
 
-Native install: close VoiceFlock, double-click `update.bat` (Windows) or run `./update.sh` (Mac/Linux), start it
+Easiest: **Settings → Version & updates → Check for updates → Update and restart**. The launcher
+(`VoiceFlock.bat` / `voiceflock.sh`) restarts the server for you. If the page ever shows a yellow banner
+saying the server is older than the page, the code was updated without a restart: press *Restart now*.
+
+By hand: close VoiceFlock, double-click `update.bat` (Windows) or run `./update.sh` (Mac/Linux), start it
 again. Docker: `git pull && docker compose up -d --build`. Your `data` folder is never touched by updates.
+
+**Starting over**: Settings → *Danger zone* → type `WIPE`. Deletes every recording, voice, print, package and
+derived file; keeps settings (token), calibration and the downloaded models.
 
 ## Notes & limits
 

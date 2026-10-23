@@ -7,7 +7,9 @@ const pct = (p) => (p * 100).toFixed(1) + "%";
 const probCls = (p, thr, hi) => p >= hi ? "hi" : p >= thr ? "mid" : "lo";
 const COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 const elapsed = (iso) => { if (!iso) return ""; const s = Math.max(0, (Date.now() - Date.parse(iso + (iso.endsWith("Z") ? "" : "Z"))) / 1000); return fmtT(s); };
+const APP_VERSION = "0.2.0";   // must match voiceflock/__init__.py; a mismatch means the server was not restarted after an update
 let SETTINGS = {}, SPECS = {}, STATE = { tab: "home", sourceId: null, personId: null, peopleView: "known", matchSource: null };
+let HEALTH = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts, body: opts.body && typeof opts.body !== "string" ? JSON.stringify(opts.body) : opts.body });
@@ -48,8 +50,10 @@ async function loadStats() {
     const q = h.queue || {};
     $("#stats").innerHTML = `<span><b>${s.persons_named}</b> people</span><span><b>${s.persons_unknown}</b> unnamed</span><span><b>${fmtT(s.sources.seconds)}</b> audio</span>
       <span>queue: <b>${q.running || 0}</b> running, <b>${q.queued || 0}</b> waiting</span><span>${s.score_mode}${s.calibrated ? " · calibrated" : ""}</span><span>device: <b>${h.device || "?"}</b>${h.gpu && h.gpu.torch_device_name ? " (" + esc(h.gpu.torch_device_name) + ")" : ""}</span>`;
+    HEALTH = h;
     const b = $("#banner"); const g = h.gpu || {};
-    if (g.nvidia_driver_gpu && !g.torch_cuda) { b.innerHTML = `NVIDIA GPU found (${esc(g.nvidia_driver_gpu)}) but VoiceFlock runs on the CPU (10-30× slower). Close VoiceFlock, run <code>gpu.bat</code>, restart.`; b.classList.remove("hidden"); }
+    if (h.version && h.version !== APP_VERSION) { b.innerHTML = `The server is running VoiceFlock ${esc(h.version)} but this page is ${APP_VERSION}: it was updated without a restart, so buttons will fail with "Not Found". ${h.supervised ? `<button class="small" onclick="restartServer()">Restart now</button>` : "Close the VoiceFlock window and start VoiceFlock.bat again."}`; b.classList.remove("hidden"); }
+    else if (g.nvidia_driver_gpu && !g.torch_cuda) { b.innerHTML = `NVIDIA GPU found (${esc(g.nvidia_driver_gpu)}) but VoiceFlock runs on the CPU (10-30× slower). Close VoiceFlock, run <code>gpu.bat</code>, restart.`; b.classList.remove("hidden"); }
     else if (!h.hf_token_set) { b.innerHTML = `No HuggingFace token set: diarization will fail. Add it under <a href="#settings">Settings</a> after accepting the model terms on huggingface.co.`; b.classList.remove("hidden"); }
     else if (!h.ffmpeg) { b.textContent = "ffmpeg not found on PATH."; b.classList.remove("hidden"); }
     else b.classList.add("hidden");
@@ -271,9 +275,10 @@ function sourceView(src) {
   const st = `<span class="pill ${src.status}">${src.status}</span>${src.incognito ? '<span class="pill">identify only</span>' : ""}`;
   const job = src.job && src.job.status === "running" ? `<div class="sub">${esc(src.job.stage)} ${Math.round(src.job.progress)}%</div>` : "";
   const err = src.error ? `<div class="warnbox">${esc(src.error)}</div>` : "";
+  const onerr = `onerror="toast('The audio for this recording could not be loaded. If the server was just updated, restart it; otherwise press Reprocess.', true)"`;
   const player = src.media_kind === "youtube" ? `<div class="player"><div id="yt-${src.id}"></div></div>`
-    : src.media_kind === "video" ? `<div class="player"><video id="aud-${src.id}" controls preload="metadata" src="/api/sources/${src.id}/media"></video></div>`
-    : src.has_audio ? `<div class="player"><audio controls preload="metadata" id="aud-${src.id}" src="/api/sources/${src.id}/media" style="max-width:100%"></audio></div>` : "";
+    : src.media_kind === "video" ? `<div class="player"><video id="aud-${src.id}" controls preload="metadata" src="/api/sources/${src.id}/media" ${onerr}></video></div>`
+    : src.has_audio ? `<div class="player"><audio controls preload="metadata" id="aud-${src.id}" src="/api/sources/${src.id}/media" style="max-width:100%" ${onerr}></audio></div>` : `<div class="warnbox">No audio file on disk for this recording (processed on another machine or deleted). Reprocess to rebuild it.</div>`;
   return `<div class="hdr"><h2>${esc(src.name)} ${st}</h2>
     <div class="q">${src.duration_s ? fmtT(src.duration_s) : ""} · ${src.n_speakers ?? "?"} voices · added ${esc((src.created_at || "").slice(0, 16).replace("T", " "))}${src.url ? ` · <a class="link" href="${esc(src.url)}" target="_blank">source ↗</a>` : ""}</div></div>${job}${err}
     ${player}${timeline(src)}
@@ -289,10 +294,11 @@ function sourceView(src) {
 function timeline(src) {
   if (!src.duration_s || !(src.speakers || []).length) return "";
   const d = src.duration_s;
-  const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s})"></div>`).join("")).join("");
-  const legend = src.speakers.map((sp, i) => `<span><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}</span>`).join("");
+  const segs = src.speakers.map((sp, i) => (sp.segments || []).map((g) => `<div class="seg" style="left:${(g.start_s / d) * 100}%;width:${Math.max(0.15, ((g.end_s - g.start_s) / d) * 100)}%;background:${COLORS[i % COLORS.length]}" title="${esc(sp.person?.name || sp.label)} ${fmtT(g.start_s)}–${fmtT(g.end_s)}" onclick="event.stopPropagation();seek(${src.id}, ${g.start_s});focusSpeaker(${sp.id})"></div>`).join("")).join("");
+  const legend = src.speakers.map((sp, i) => `<span class="link" onclick="focusSpeaker(${sp.id})" title="scroll to this voice"><i style="background:${COLORS[i % COLORS.length]}"></i>${esc(sp.person?.name || sp.label)}</span>`).join("");
   return `<div class="timeline" id="tl-${src.id}" onclick="seekFrac(${src.id}, event)">${segs}<div class="cursor" style="left:0"></div></div><div class="tl-legend">${legend}</div>`;
 }
+function focusSpeaker(id) { const el = $(`#spk-${id}`); if (!el) return; el.scrollIntoView({ block: "start", behavior: "smooth" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600); }
 function seek(sid, t) {
   if (YTP && YTP.seekTo) { YTP.seekTo(t, true); YTP.playVideo(); $(`#yt-${sid}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }); return; }
   const a = $(`#aud-${sid}`); if (!a) return;
@@ -335,7 +341,7 @@ function speakerCard(sp, src, idx = 0) {
   else verdict = `<b>Unknown</b>${src.incognito ? ' <span class="muted">(not saved)</span>' : ""}`;
   const lg = sp.longest ? `<button class="small" onclick="seek(${src.id}, ${sp.longest.start_s})">▶ watch longest turn (${fmtT(sp.longest.start_s)}, ${sp.longest.seconds}s)</button>` : "";
   const chips = (sp.segments || []).slice(0, 10).map((g) => `<button onclick="seek(${src.id}, ${g.start_s})">${fmtT(g.start_s)}</button>`).join("");
-  return `<div class="spk" style="border-left:3px solid ${color}">
+  return `<div class="spk" id="spk-${sp.id}" style="border-left:3px solid ${color}">
     <div class="hdr"><div><span class="title">${esc(sp.label)}</span> · ${verdict}</div>
       <div class="q">speech <b>${fmtT(sp.speech_seconds)}</b> · quality <b>${sp.quality_score?.toFixed(0) ?? "-"}</b> · SNR <b>${sp.snr_db?.toFixed(0) ?? "-"} dB</b> · ${sp.n_segments} turns</div></div>
     <div class="actions" style="margin:6px 0">${lg}<div class="chips">${chips}${sp.segments.length > 10 ? `<span class="muted">+${sp.segments.length - 10}</span>` : ""}</div></div>
@@ -659,7 +665,7 @@ async function loadSettings() {
     f.innerHTML = Object.entries(groups).map(([g, keys]) => `<div class="grp">${g}</div>` + keys.map((k) => { const s = SPECS[k], v = SETTINGS[k];
       const input = s.type === "bool" ? `<input type="checkbox" name="${k}" ${v ? "checked" : ""}>` : s.type === "secret" ? `<input type="password" name="${k}" value="${esc(v)}" autocomplete="off">` : s.type === "float" ? `<input type="number" step="0.01" name="${k}" value="${v}">` : s.type === "int" ? `<input type="number" step="1" name="${k}" value="${v}">` : (k === "alert_default_message" ? `<textarea name="${k}" rows="2">${esc(v)}</textarea>` : `<input name="${k}" value="${esc(v)}">`);
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
-    renderSelftest(); renderPhone();
+    renderSelftest(); renderPhone(); renderVersion();
     const st = await api("/api/stats");
     $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · calibration: ${st.calibrated ? "fitted" : "defaults"} raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;
@@ -680,6 +686,46 @@ async function renderPhone() {
     ms.textContent = r.status === 200 ? `laptop-side phone model ready (${Math.round((Number(r.headers.get("content-length")) || 0) / 1048576)} MB)` : "not exported on this laptop (the phone downloads it from GitHub anyway)";
   } catch (e) {}
 }
+async function renderVersion() {
+  const h = HEALTH || (await api("/api/health").catch(() => null)); if (!h) return;
+  $("#version-info").innerHTML = `Server <b>${esc(h.version)}</b> · page ${APP_VERSION} · up since ${esc((h.started_at || "").slice(0, 16).replace("T", " "))} UTC${h.supervised ? "" : ' · <span class="muted">started by hand: restart from here is not available</span>'}`;
+  $("#btn-restart").classList.toggle("hidden", !h.supervised);
+}
+async function restartServer() {
+  try { await api("/api/admin/restart", { method: "POST" }); toast("Restarting… the page reloads when the server is back"); waitForServer(); } catch (e) { onErr(e); }
+}
+function waitForServer() {
+  const started = HEALTH?.started_at; let tries = 0;
+  const t = setInterval(async () => { tries++; try { const h = await api("/api/health"); if (h.started_at !== started) { clearInterval(t); location.reload(); } } catch (e) {} if (tries > 90) clearInterval(t); }, 2000);
+}
+$("#btn-check-update").onclick = async () => {
+  $("#update-msg").textContent = "checking…"; $("#update-log").textContent = "";
+  try {
+    const u = await api("/api/admin/update");
+    if (u.error) { $("#update-msg").textContent = u.error; return; }
+    $("#update-msg").textContent = u.behind ? `${u.behind} update(s) available (${u.local} → ${u.remote})` : `up to date (${u.local})`;
+    $("#update-log").textContent = (u.log || []).join("\n");
+    $("#btn-apply-update").classList.toggle("hidden", !u.behind);
+    if (u.behind && !u.supervised) $("#update-msg").textContent += " · after updating, close and reopen VoiceFlock.bat";
+  } catch (e) { onErr(e); }
+};
+$("#btn-apply-update").onclick = async () => {
+  try {
+    const r = await api("/api/admin/update", { method: "POST" }); $("#update-msg").textContent = "updating…";
+    const poll = setInterval(async () => {
+      try { const st = await api("/api/admin/update/status"); $("#update-log").textContent = st.log.join("\n");
+        if (st.error) { clearInterval(poll); $("#update-msg").textContent = "update failed: " + st.error; }
+        else if (!st.running) { clearInterval(poll); $("#update-msg").textContent = r.will_restart ? "restarting…" : "updated: close and reopen VoiceFlock.bat"; if (r.will_restart) waitForServer(); } }
+      catch (e) { /* server is restarting */ }
+    }, 1500);
+  } catch (e) { onErr(e); }
+};
+$("#btn-restart").onclick = restartServer;
+$("#wipe-confirm").addEventListener("input", () => { $("#btn-wipe").disabled = $("#wipe-confirm").value.trim() !== "WIPE"; });
+$("#btn-wipe").onclick = async () => {
+  if (!confirm("Really delete every recording, voice and print? Settings and models stay.")) return;
+  try { const r = await api("/api/admin/wipe", { method: "POST", body: { confirm: "WIPE", keep_settings: true } }); $("#wipe-msg").textContent = "Wiped: " + Object.entries(r.wiped).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(", "); $("#wipe-confirm").value = ""; $("#btn-wipe").disabled = true; loadStats(); } catch (e) { onErr(e); }
+};
 $("#btn-export-now").onclick = async () => { try { const r = await api("/api/mobile/export_now", { method: "POST" }); toast("Written: " + r.written); renderPhone(); } catch (e) { onErr(e); } };
 $("#btn-phone-edits").onclick = async () => { try { const body = JSON.parse($("#phone-edits").value); const r = await api("/api/import/phone_settings", { method: "POST", body }); $("#phone-edits-msg").textContent = `applied: ${r.persons} people, ${r.groups} packages`; $("#phone-edits").value = ""; } catch (e) { onErr(e); } };
 $("#btn-export-model").onclick = async () => { try { await api("/api/mobile/export_model", { method: "POST" }); toast("Model export queued"); } catch (e) { onErr(e); } };

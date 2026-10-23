@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "voiceflock"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open-set speaker identification: diarize audio, voiceprint every speaker, match against a gallery."
 requires-python = ">=3.10"
 dependencies = [

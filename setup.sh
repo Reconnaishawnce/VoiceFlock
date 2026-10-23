@@ -14,7 +14,12 @@ pip install -e .
 cat > voiceflock.sh <<'EOS'
 #!/usr/bin/env bash
 cd "$(dirname "$0")"; set -a; [ -f .env ] && . ./.env; set +a
-exec .venv/bin/voiceflock serve --host 0.0.0.0 --port "${VOICEFLOCK_PORT:-8787}"
+export VOICEFLOCK_SUPERVISED=1
+while true; do
+  .venv/bin/voiceflock serve --host 0.0.0.0 --port "${VOICEFLOCK_PORT:-8787}" --workers "${VOICEFLOCK_WORKERS:-1}"
+  [ $? -eq 3 ] || break
+  echo "Restarting VoiceFlock..."
+done
 EOS
 chmod +x voiceflock.sh
 echo "Done. Start with ./voiceflock.sh and open http://localhost:8787"

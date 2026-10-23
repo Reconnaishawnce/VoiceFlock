@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, audio, config, db, feeds, gallery, live, mobile, onnx_export, stills, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, stills, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -61,6 +61,11 @@ class GroupPatch(BaseModel):
 
 class MembersIn(BaseModel):
     person_ids: list[int]
+
+
+class WipeIn(BaseModel):
+    confirm: str
+    keep_settings: bool = True
 
 
 class YtListIn(BaseModel):
@@ -176,6 +181,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
 
     app = FastAPI(title="VoiceFlock", version=__version__, lifespan=lifespan)
     app.state.gcache = gallery.GalleryCache()
+    app.state.started_at = __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime())
 
     password = os.environ.get("VOICEFLOCK_PASSWORD", "")
     if password:
@@ -374,6 +380,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         info["workers"] = workers if run_worker else 0
         info["password_required"] = bool(password)
         info["lan_ips"] = lan_ips()
+        info["supervised"] = admin.supervised()
+        info["started_at"] = app.state.started_at
         info["queue"] = db.row(conn, "SELECT SUM(status='queued') AS queued, SUM(status='running') AS running,"
                                      " SUM(status='failed') AS failed, SUM(status='done') AS done FROM jobs")
         return info
@@ -1252,6 +1260,35 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             pass
         finally:
             conn.close()
+
+    # ---------------------------------------------------------------- admin: update / restart / wipe
+    @app.get("/api/admin/update")
+    def update_check():
+        return admin.check_update()
+
+    @app.post("/api/admin/update")
+    def update_apply():
+        admin.apply_update(restart=admin.supervised())
+        return {"started": True, "will_restart": admin.supervised()}
+
+    @app.get("/api/admin/update/status")
+    def update_progress():
+        return admin.update_status()
+
+    @app.post("/api/admin/restart")
+    def restart():
+        if not admin.supervised():
+            raise HTTPException(400, "the server was not started by VoiceFlock.bat / voiceflock.sh, so it cannot restart itself; restart it by hand")
+        admin.restart_server()
+        return {"restarting": True}
+
+    @app.post("/api/admin/wipe")
+    def wipe(body: WipeIn, conn=Depends(get_conn)):
+        if body.confirm != "WIPE":
+            raise HTTPException(400, "type WIPE to confirm")
+        counts = admin.wipe_library(conn, keep_settings=body.keep_settings)
+        app.state.gcache.invalidate()
+        return {"wiped": counts}
 
     # ---------------------------------------------------------------- static
     config.ensure_dirs()

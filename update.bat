@@ -1,5 +1,6 @@
 @echo off
 rem Updates VoiceFlock (and yt-dlp, which YouTube breaks regularly). Close VoiceFlock first, then start VoiceFlock.bat again.
+rem Tip: with VoiceFlock running you can instead use Settings -> Update and restart in the web UI.
 cd /d "%~dp0"
 set "HERE=%CD:\=/%"
 git config --global --add safe.directory "%HERE%" >nul 2>&1
