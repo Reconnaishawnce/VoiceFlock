@@ -249,9 +249,18 @@ network, and audio is never stored or sent anywhere.
    (or Settings → *Import library file*). Then press *Download model* once (85 MB from GitHub). Re-send the
    library whenever you flag or name voices. Alternatively, with the phone on the same Wi-Fi or Tailscale,
    enter the laptop address in the app's Settings and press **Sync voices + model**.
-4. **Listen**: Start listening. A foreground notification shows it's running; alerts arrive even with the
-   screen off. The Voices tab lets you flag/unflag on the phone (overrides the laptop's flags) or alert on
-   every known voice. Re-sync whenever the library changes.
+4. **Listen**: tap the big microphone. The ring shows the level, the card under it shows who is speaking
+   right now, and every known voice heard above the threshold lands in the **Heard** log (kept across
+   restarts, shareable as CSV). Flagged voices also alarm, speak their line and post a notification, with the
+   screen off. The Voices tab lets you flag/unflag on the phone (overrides the laptop's flags), filter to
+   flagged voices or packages, and open any voice for its sound, spoken line and recent sightings.
+5. **Identify a voice** (Listen tab): hold the phone toward whoever is speaking; after about six seconds of
+   speech it shows the five closest voices. "This is them" adds the clip as a new print for that person,
+   "Enroll" adds someone new (alerts on by default). Both work offline and take effect immediately; they
+   reach the laptop with Settings → *Share my edits*, which now carries these enrollments too.
+6. **Keep it running**: Settings → *Keep it running* asks Android for unrestricted battery use (some phones
+   stop background microphones otherwise) and adds a quick-settings tile that starts and stops listening
+   from the notification shade.
 
 **Packages.** People → Packages groups voices under one alert setting ("Politicians": alert on, vault sound,
 one spoken line for all 500), downloadable as a single file and importable on another VoiceFlock. A person's

@@ -13,6 +13,7 @@ data class Person(
     val alertSound: String? = null,      // siren | horn | vault | radar | klaxon | chime | none | null = inherit
     val alertMessage: String? = null,    // template with [NAME]; null = inherit
     val groupIds: List<Int> = emptyList(),
+    val local: Boolean = false,          // enrolled on this phone (negative id), not yet in the laptop's library
 )
 
 data class Group(val id: Int, val name: String, val description: String?, val alert: Boolean, val alertSound: String?, val alertMessage: String?, val n: Int)
@@ -48,6 +49,8 @@ class Gallery(
 
     val printCount get() = matrix.size
 
+    fun withPeople(p: List<Person>) = Gallery(p, calibA, calibB, threshold, windowS, hopS, minLevelDb, generatedAt, dim, defaultMessage, defaultSound, groups)
+
     fun probability(cosine: Float): Float = (1.0 / (1.0 + exp(-calibA * (cosine + calibB)))).toFloat()
 
     /** Best print per person, ranked by cosine; top k. */
@@ -78,7 +81,7 @@ class Gallery(
         fun load(context: Context): Gallery? {
             val f = file(context)
             if (!f.exists()) return null
-            return try { parse(f.readText()) } catch (e: Exception) { null }
+            return try { LocalPrints.merge(parse(f.readText()), LocalPrints.load(context)) } catch (e: Exception) { null }
         }
 
         fun parse(text: String): Gallery {

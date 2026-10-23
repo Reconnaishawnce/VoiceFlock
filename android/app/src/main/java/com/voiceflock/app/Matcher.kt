@@ -44,6 +44,9 @@ class Matcher(
     private var seen = 0L
     private var lastLevel = -100f
     private val history = ArrayDeque<Map<Int, Float>>()
+    /** Called with every 100 ms frame judged to be speech (used by Identify to collect a clip). */
+    var onSpeechFrame: ((FloatArray) -> Unit)? = null
+    var speechSeconds = 0f; private set
 
     private fun thresholdDb(): Float {
         if (levels.size < 10) return minLevelDb
@@ -68,7 +71,7 @@ class Matcher(
             val thr = thresholdDb()
             levels.addLast(level); while (levels.size > 100) levels.removeFirst()
             if (level > thr) {
-                speech.addLast(fr); sinceSpeech = 0f
+                speech.addLast(fr); sinceSpeech = 0f; speechSeconds += frameS; onSpeechFrame?.invoke(fr)
                 while (speech.size * frameS > windowS) speech.removeFirst()
             } else {
                 sinceSpeech += frameS

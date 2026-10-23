@@ -6,7 +6,7 @@ plugins {
 
 // CI passes -PversionCode=<run number> -PversionName=<x.y.z>; local builds use the defaults below.
 val vCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
-val vName = (project.findProperty("versionName") as String?) ?: "0.1.0"
+val vName = (project.findProperty("versionName") as String?) ?: "0.2.0"
 // Release signing from the environment (GitHub secrets); absent -> the debug key, so local builds still work.
 val ksPath = System.getenv("VOICEFLOCK_KEYSTORE")
 val ksPass = System.getenv("VOICEFLOCK_KEYSTORE_PASSWORD")
@@ -55,7 +55,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 

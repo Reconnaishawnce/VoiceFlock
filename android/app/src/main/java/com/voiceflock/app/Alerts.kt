@@ -47,7 +47,7 @@ object Alerts {
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(context, 1, Intent(context, ListenService::class.java).setAction(ListenService.ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_stat_wave)
             .setContentTitle("VoiceFlock is listening")
             .setContentText(text)
             .setOngoing(true)
@@ -179,19 +179,21 @@ object Alerts {
         }
     }
 
-    fun voiceAlert(context: Context, name: String, probability: Float) {
+    /** One notification per person (so two flagged voices in a row both stay visible). */
+    fun voiceAlert(context: Context, person: Person, probability: Float) {
         val nm = context.getSystemService(NotificationManager::class.java)
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(context, CHANNEL_ALERT)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("Voice heard: $name")
-            .setContentText("${(probability * 100).toInt()}% match")
+            .setSmallIcon(R.drawable.ic_stat_wave)
+            .setColor(0xFFE8B35A.toInt())
+            .setContentTitle("Voice heard: ${person.name}")
+            .setContentText("${(probability * 100).toInt()}% match · ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date())}")
             .setContentIntent(open)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .build()
-        nm.notify(NOTIF_ALERT, n)
+        nm.notify(NOTIF_ALERT + Math.floorMod(person.id, 100_000), n)
         vibrate(context)
     }
 

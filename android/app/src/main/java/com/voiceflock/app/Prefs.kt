@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 
 /** Small settings store: server, password, per-voice alert overrides. */
 class Prefs(context: Context) {
+    private val ctx: Context = context.applicationContext
     private val sp: SharedPreferences = context.getSharedPreferences("voiceflock", Context.MODE_PRIVATE)
 
     var serverUrl: String
@@ -93,6 +94,7 @@ class Prefs(context: Context) {
         val persons = org.json.JSONObject(); val groups = org.json.JSONObject()
         for ((k, v) in sp.all) {
             val id = k.substringAfter("_", "").toIntOrNull() ?: continue
+            if (id < 0) continue
             when {
                 k.startsWith("alert_") -> persons.optJSONObject(id.toString())?.put("alert", v) ?: persons.put(id.toString(), org.json.JSONObject().put("alert", v))
                 k.startsWith("snd_") -> persons.optJSONObject(id.toString())?.put("sound", v) ?: persons.put(id.toString(), org.json.JSONObject().put("sound", v))
@@ -103,7 +105,7 @@ class Prefs(context: Context) {
             }
         }
         return org.json.JSONObject().put("format", "voiceflock-phone-settings").put("library_generated_at", g?.generatedAt ?: "")
-            .put("persons", persons).put("groups", groups).toString(1)
+            .put("persons", persons).put("groups", groups).put("enrollments", LocalPrints.exportJson(ctx)).toString(1)
     }
 
     /** Per-person alert flag set on the phone; absent = use the server's flag. */

@@ -96,9 +96,23 @@ def test_auto_export_and_phone_settings(data_dir, conn, tmp_path):
         r = c.post("/api/import/phone_settings", json={"format": "voiceflock-phone-settings",
                    "persons": {str(ids["Nancy Pelosi"]): {"alert": True, "sound": "horn", "message": "Yo [NAME]"}, "424242": {"alert": True}},
                    "groups": {str(g["id"]): {"alert": True, "sound": "radar"}}}).json()
-        assert r == {"persons": 1, "groups": 1}
+        assert r == {"persons": 1, "groups": 1, "enrollments": 0}
         p = c.get(f"/api/persons/{ids['Nancy Pelosi']}").json()
         assert p["alert"] == 1 and p["alert_sound"] == "horn" and p["spoken"] == "Yo Nancy Pelosi"
         assert c.get("/api/groups").json()["groups"][0]["alert_sound"] == "radar"
         assert c.post("/api/import/phone_settings", json={"format": "nope"}).status_code == 400
         assert c.post("/api/mobile/export_now").json()["written"] == str(out)
+        # voiceprints captured on the phone: add to an existing person, match by name, or create
+        import base64
+        import numpy as np
+        b64 = lambda: base64.b64encode(np.random.default_rng(1).standard_normal(192).astype(np.float32).tobytes()).decode()
+        r = c.post("/api/import/phone_settings", json={"format": "voiceflock-phone-settings", "enrollments": [
+            {"person_id": ids["Nancy Pelosi"], "prints": [b64()]},
+            {"person_id": -3, "name": "nancy pelosi", "prints": [b64(), b64()]},
+            {"person_id": -4, "name": "Phone Stranger", "alert": True, "prints": [b64()]},
+            {"name": "", "prints": [b64()]}, {"name": "no prints"}]}).json()
+        assert r["enrollments"] == 3
+        assert conn.execute("SELECT COUNT(*) FROM prints WHERE person_id=? AND origin='phone'", (ids["Nancy Pelosi"],)).fetchone()[0] == 3
+        new = conn.execute("SELECT id, kind, alert FROM persons WHERE name='Phone Stranger'").fetchone()
+        assert new and new[1] == "named" and new[2] == 1
+        assert conn.execute("SELECT COUNT(*) FROM prints WHERE person_id=?", (new[0],)).fetchone()[0] == 1

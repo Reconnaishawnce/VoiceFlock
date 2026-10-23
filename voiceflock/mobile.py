@@ -125,6 +125,43 @@ def apply_phone_settings(conn: sqlite3.Connection, data: dict) -> dict:
             if "message" in v:
                 conn.execute("UPDATE groups SET alert_message=? WHERE id=?", ((v["message"] or None), int(gid)))
             n_g += 1
+        n_e = _apply_enrollments(conn, data.get("enrollments") or [])
         mark_dirty(conn)
         db.bump_prints_version(conn)
-    return {"persons": n_p, "groups": n_g}
+    return {"persons": n_p, "groups": n_g, "enrollments": n_e}
+
+
+def _apply_enrollments(conn: sqlite3.Connection, items: list) -> int:
+    """Voiceprints captured on the phone (Identify -> add / enroll). Each item: prints (base64 float32),
+    plus person_id (existing person) or name (matched case-insensitively, else created)."""
+    import numpy as np
+    from . import gallery as gal
+    n = 0
+    for e in items:
+        prints = []
+        for b in e.get("prints") or []:
+            try:
+                v = np.frombuffer(base64.b64decode(b), dtype=np.float32)
+            except Exception:
+                continue
+            if v.size >= 64 and np.isfinite(v).all():
+                prints.append(v.copy())
+        if not prints:
+            continue
+        pid = e.get("person_id")
+        row = None
+        if pid and int(pid) > 0:
+            row = conn.execute("SELECT id FROM persons WHERE id=?", (int(pid),)).fetchone()
+        name = (e.get("name") or "").strip()
+        if row is None and name:
+            row = conn.execute("SELECT id FROM persons WHERE lower(name)=lower(?)", (name,)).fetchone()
+        if row is None:
+            if not name:
+                continue
+            pid = conn.execute("INSERT INTO persons(name, kind, alert) VALUES(?, 'named', ?)",
+                               (name, int(bool(e.get("alert", False))))).lastrowid
+        else:
+            pid = row[0]
+        gal.add_prints(conn, int(pid), None, None, None, prints, "phone")
+        n += 1
+    return n
