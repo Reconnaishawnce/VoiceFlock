@@ -211,6 +211,10 @@ def decide_and_record(conn: sqlite3.Connection, source: dict, results: list[Spea
                 conn.execute("UPDATE source_speakers SET person_id=?, assignment='auto' WHERE id=?",
                              (top.person_id, r.source_speaker_id))
             r.decision, r.person_id = "matched", top.person_id
+            if not incognito:
+                from . import sightings as sg
+                sg.add(conn, [{"kind": "recording", "person_id": top.person_id, "name": top.name, "probability": top.probability,
+                               "flagged": bool((g.persons.get(top.person_id) or {}).get("alert")), "source_id": sid}])
             continue
 
         if incognito:

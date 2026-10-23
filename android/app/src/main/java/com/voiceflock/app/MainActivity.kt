@@ -73,14 +73,40 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) ListenService.start(this)
     }
 
-    /** "Share → VoiceFlock" or "Open with VoiceFlock" on a library file from WhatsApp, email, Drive... */
+    /** "Share → VoiceFlock": a library file (from WhatsApp, email, Drive...) or a link to queue on the laptop. */
     private fun handleShare(intent: Intent?) {
-        val uri: Uri = when (intent?.action) {
+        if (intent == null) return
+        if (intent.getBooleanExtra("vf_handled", false)) return
+        val uri: Uri? = when (intent.action) {
             Intent.ACTION_SEND -> @Suppress("DEPRECATION") intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             Intent.ACTION_VIEW -> intent.data
             else -> null
-        } ?: return
-        importLibraryUri(this, uri)
+        }
+        val text = if (intent.action == Intent.ACTION_SEND) intent.getStringExtra(Intent.EXTRA_TEXT) else null
+        intent.putExtra("vf_handled", true)
+        when {
+            uri != null -> importLibraryUri(this, uri)
+            text != null && text.trimStart().startsWith("{") -> try { val g = Sync.importLibrary(this, text); reloadGallery(this); Toast.makeText(this, "Imported ${g.people.size} voices", Toast.LENGTH_LONG).show() } catch (e: Exception) { Toast.makeText(this, "Not a VoiceFlock library: ${e.message}", Toast.LENGTH_LONG).show() }
+            text != null -> Regex("https?://\\S+").find(text)?.value?.let { queueLink(it) } ?: Toast.makeText(this, "No link in the shared text", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun queueLink(url: String) {
+        val prefs = Prefs(this)
+        if (!Sync.connected(prefs)) { Toast.makeText(this, "Set the laptop address in Settings first", Toast.LENGTH_LONG).show(); return }
+        Toast.makeText(this, "Sending to the laptop…", Toast.LENGTH_SHORT).show()
+        GlobalScope.launch(Dispatchers.IO) {
+            try { val name = Sync.queueUrl(prefs, url, prefs.shareMode); runOnUiThread { Toast.makeText(this@MainActivity, "Queued on the laptop: $name", Toast.LENGTH_LONG).show() } }
+            catch (e: Exception) { runOnUiThread { Toast.makeText(this@MainActivity, "Could not queue: ${e.message}", Toast.LENGTH_LONG).show() } }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val prefs = Prefs(this)
+        if (prefs.autoSync && Sync.connected(prefs)) GlobalScope.launch(Dispatchers.IO) {
+            try { val r = Sync.syncAll(this@MainActivity, prefs); if (r != "recent" && r != "in sync") AppState.status.value = "sync: $r" } catch (_: Exception) {}
+        }
     }
 }
 

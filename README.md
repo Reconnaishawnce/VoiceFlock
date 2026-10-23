@@ -267,6 +267,17 @@ one spoken line for all 500), downloadable as a single file and importable on an
 own settings override their package's. The phone shows packages at the top of Voices with the same bulk
 switch and editor.
 
+**Laptop ↔ phone over the internet (Tailscale).** Install [Tailscale](https://tailscale.com/download) on the
+laptop and on the phone with the same account (free for personal use). The laptop's Settings → *Phone app*
+then shows the address to paste into the app's Settings → *Laptop connection* (something like
+`http://thinkpad.tailxxxx.ts.net:8787`); set `VOICEFLOCK_PASSWORD` in `.env` first and enter it on the phone.
+From then on, from any network: the phone pulls the library whenever it changes and pushes your flags, sounds,
+lines and phone-enrolled voices back; your phone detections and the laptop's (Live mode, new recordings) merge
+into one timeline (phone: *Heard*; laptop: Home → *Heard live* and each person's *Timeline*); flagged voices the
+laptop hears notify the phone; and sharing a YouTube link from any app to VoiceFlock queues it on the laptop
+(Library or Review queue, your choice). For HTTPS, which lets the phone's *browser* use the laptop UI with a
+microphone, run once on the laptop: `tailscale serve --bg 8787`.
+
 **Getting the library to the phone without touching the firewall.** Settings → *Auto-export phone library
 to* a folder that syncs to the cloud (Dropbox, Google Drive, OneDrive). The file is rewritten whenever voices,
 packages or alerts change. Share that file's link once and paste it into the app's Settings → *Library link*;

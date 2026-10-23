@@ -84,7 +84,7 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
                 if (sightings.isNotEmpty()) TextButton(onClick = { Sightings.clear(ctx) }) { Text("Clear", color = VF.Muted) }
             }
         }
-        if (sightings.isEmpty()) item { Empty(if (g == null) "Sightings appear here once a library is on the phone." else "Nothing heard yet. Known voices above the threshold are logged here; flagged ones also alert.") }
+        if (sightings.isEmpty()) item { Empty(if (g == null) "Sightings appear here once a library is on the phone." else "Nothing heard yet. Known voices above the threshold are logged here, flagged ones also alert, and the laptop's detections appear too when it is connected.") }
         else {
             val days = sightings.groupBy { Sightings.dayLabel(it.at) }
             for ((day, list) in days) {
@@ -104,7 +104,7 @@ private fun SightingRow(s: Sighting, thr: Float) {
                 if (s.flagged) Icon(Icons.Rounded.NotificationsActive, null, tint = VF.Amber, modifier = Modifier.size(14.dp))
             }
         }) {
-        TwoLine(s.name, Sightings.time(s.at) + if (s.flagged) " · alerted" else "")
+        TwoLine(s.name, Sightings.time(s.at) + (if (s.flagged) " · alerted" else "") + when (s.device) { "laptop" -> " · 💻 laptop"; "recording" -> " · 🎞 " + (s.source ?: "recording"); else -> "" })
     }
 }
 

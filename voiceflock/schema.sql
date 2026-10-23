@@ -224,3 +224,20 @@ CREATE TRIGGER IF NOT EXISTS transcript_au AFTER UPDATE ON transcript_segments B
   INSERT INTO transcript_fts(transcript_fts, rowid, text) VALUES ('delete', old.id, old.text);
   INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
 END;
+
+-- One timeline of "this voice was heard": laptop Live mode, the phone, new recordings.
+CREATE TABLE IF NOT EXISTS sightings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at_ms INTEGER NOT NULL,
+  person_id INTEGER,
+  name TEXT NOT NULL,
+  probability REAL,
+  flagged INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL,                      -- live | phone | recording
+  source_id INTEGER,
+  device TEXT,                             -- phone id for phone sightings
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(kind, device, at_ms, name)
+);
+CREATE INDEX IF NOT EXISTS idx_sightings_at ON sightings(at_ms);
+CREATE INDEX IF NOT EXISTS idx_sightings_person ON sightings(person_id, at_ms);

@@ -87,6 +87,104 @@ object Sync {
         model
     }
 
+    fun connected(prefs: Prefs) = prefs.serverUrl.isNotBlank() && !prefs.serverUrl.contains("192.168.1.10:8787")
+
+    private fun post(prefs: Prefs, path: String, body: org.json.JSONObject): org.json.JSONObject {
+        val c = open(prefs, path, "POST")
+        c.doOutput = true; c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(body.toString().toByteArray()) }
+        val code = c.responseCode
+        if (code == 401) throw SyncError("password rejected")
+        val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+        if (code >= 400) throw SyncError("laptop replied $code: ${text.take(200)}")
+        return org.json.JSONObject(text.ifBlank { "{}" })
+    }
+
+    private fun getJson(prefs: Prefs, path: String): org.json.JSONObject {
+        val c = open(prefs, path)
+        val code = c.responseCode
+        if (code == 401) throw SyncError("password rejected")
+        if (code != 200) throw SyncError("laptop replied $code")
+        return org.json.JSONObject(c.inputStream.bufferedReader().readText())
+    }
+
+    /** Is the laptop there? Returns a one-line description (version, device, Tailscale name). */
+    suspend fun health(prefs: Prefs): String = withContext(Dispatchers.IO) {
+        val h = getJson(prefs, "/api/health")
+        val ts = h.optJSONObject("tailscale")?.optString("dns_name", "")?.ifEmpty { null }
+        prefs.lastLaptop = "VoiceFlock ${h.optString("version")} · ${h.optString("device")}" + (ts?.let { " · Tailscale $it" } ?: "")
+        prefs.lastLaptop
+    }
+
+    /** Share → VoiceFlock on a link: queue it on the laptop. */
+    suspend fun queueUrl(prefs: Prefs, url: String, mode: String): String = withContext(Dispatchers.IO) {
+        val r = post(prefs, "/api/upload_url", org.json.JSONObject().put("url", url).put("mode", mode))
+        r.optString("name", "").ifEmpty { url }
+    }
+
+    /** Flags, sounds, lines and phone enrollments -> laptop. */
+    suspend fun pushEdits(ctx: Context, prefs: Prefs): org.json.JSONObject = withContext(Dispatchers.IO) {
+        val r = post(prefs, "/api/import/phone_settings", org.json.JSONObject(prefs.exportEdits(AppState.gallery.value)))
+        prefs.editsDirty = false
+        r
+    }
+
+    /** Laptop library -> phone when it changed. Returns the new gallery or null when unchanged. */
+    suspend fun pullGallery(ctx: Context, prefs: Prefs): Gallery? = withContext(Dispatchers.IO) {
+        val c = open(prefs, "/api/mobile/gallery.json")
+        if (c.responseCode == 401) throw SyncError("password rejected")
+        if (c.responseCode != 200) throw SyncError("laptop replied ${c.responseCode} for the library")
+        val text = c.inputStream.bufferedReader().readText()
+        val g = Gallery.parse(text)
+        val cur = AppState.gallery.value
+        if (cur != null && cur.generatedAt == g.generatedAt && cur.people.size == g.people.size) return@withContext null
+        Gallery.file(ctx).writeText(text)
+        prefs.lastSync = "laptop " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())
+        g
+    }
+
+    /** This phone's detections -> laptop timeline (only what wasn't sent yet). */
+    suspend fun pushSightings(ctx: Context, prefs: Prefs): Int = withContext(Dispatchers.IO) {
+        val mine = AppState.sightings.value.filter { it.device == "phone" && it.at > prefs.sightingsPushedMs }
+        if (mine.isEmpty()) return@withContext 0
+        val items = org.json.JSONArray()
+        for (s in mine) items.put(org.json.JSONObject().put("kind", "phone").put("at_ms", s.at).put("person_id", if (s.personId > 0) s.personId else org.json.JSONObject.NULL)
+            .put("name", s.name).put("probability", s.probability.toDouble()).put("flagged", s.flagged))
+        post(prefs, "/api/sightings", org.json.JSONObject().put("device", prefs.deviceId).put("items", items))
+        prefs.sightingsPushedMs = mine.maxOf { it.at }
+        mine.size
+    }
+
+    /** Laptop timeline (Live mode + new recordings) -> phone. Returns the new ones. */
+    suspend fun pullSightings(ctx: Context, prefs: Prefs): List<Sighting> = withContext(Dispatchers.IO) {
+        val since = if (prefs.sightingsPulledMs > 0) prefs.sightingsPulledMs else System.currentTimeMillis() - 7L * 86_400_000
+        val j = getJson(prefs, "/api/sightings?since_ms=$since&limit=500&exclude_device=${prefs.deviceId}")
+        val arr = j.getJSONArray("sightings"); val out = ArrayList<Sighting>()
+        for (i in 0 until arr.length()) { val x = arr.getJSONObject(i)
+            val kind = x.optString("kind"); if (kind == "phone") continue
+            out.add(Sighting(x.getLong("at_ms"), x.optInt("person_id", 0), x.getString("name"), x.optDouble("probability", 0.0).toFloat(), x.optInt("flagged", 0) == 1,
+                if (kind == "live") "laptop" else "recording", x.optString("source_name", "").ifEmpty { null })) }
+        if (out.isNotEmpty()) prefs.sightingsPulledMs = out.maxOf { it.at }
+        else prefs.sightingsPulledMs = maxOf(prefs.sightingsPulledMs, j.optLong("now_ms", since) - 60_000)
+        Sightings.addRemote(ctx, out)
+    }
+
+    /** Everything, each step on its own so one failure doesn't stop the rest. Returns a short summary. */
+    suspend fun syncAll(ctx: Context, prefs: Prefs, force: Boolean = false): String {
+        if (!connected(prefs)) return "no laptop address"
+        if (!force && System.currentTimeMillis() - prefs.lastSyncMs < 45_000) return "recent"
+        val parts = ArrayList<String>()
+        try { if (prefs.editsDirty || LocalPrints.count(ctx) > 0) { val r = pushEdits(ctx, prefs); parts += "edits sent" + (r.optInt("enrollments", 0).takeIf { it > 0 }?.let { " ($it voices)" } ?: "") } } catch (e: Exception) { parts += "edits: ${e.message}" }
+        try { pullGallery(ctx, prefs)?.let { reloadGallery(ctx); parts += "library ${it.people.size} voices" } } catch (e: Exception) { parts += "library: ${e.message}" }
+        try { val n = pushSightings(ctx, prefs); if (n > 0) parts += "$n sightings sent" } catch (e: Exception) { parts += "sightings: ${e.message}" }
+        try { val n = pullSightings(ctx, prefs); if (n.isNotEmpty()) parts += "${n.size} from laptop" } catch (e: Exception) { parts += "timeline: ${e.message}" }
+        if (!Gallery.modelFile(ctx).exists()) try { downloadModelFromInternet(ctx) {} ; parts += "model ready" } catch (e: Exception) { parts += "model: ${e.message}" }
+        prefs.lastSyncMs = System.currentTimeMillis()
+        val line = parts.ifEmpty { listOf("in sync") }.joinToString(" · ")
+        prefs.lastSync = "laptop " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date()) + " · " + line
+        return line
+    }
+
     private fun open(prefs: Prefs, path: String, method: String = "GET"): HttpURLConnection {
         val c = URL(prefs.serverUrl + path).openConnection() as HttpURLConnection
         c.requestMethod = method

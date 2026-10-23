@@ -197,6 +197,19 @@ object Alerts {
         vibrate(context)
     }
 
+    /** A flagged voice was heard by the laptop (Live mode or a new recording): notify, no alarm. */
+    fun remoteNotification(context: Context, s: Sighting) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val where = if (s.device == "laptop") "on the laptop (Live)" else "in a new recording" + (s.source?.let { ": $it" } ?: "")
+        val n = NotificationCompat.Builder(context, CHANNEL_ALERT)
+            .setSmallIcon(R.drawable.ic_stat_wave).setColor(0xFF7FB5FF.toInt())
+            .setContentTitle("${s.name} heard $where")
+            .setContentText("${(s.probability * 100).toInt()}% · ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(s.at))}")
+            .setContentIntent(open).setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH).build()
+        nm.notify(50_000 + Math.floorMod((s.at / 1000).toInt() + s.name.hashCode(), 40_000), n)
+    }
+
     private fun vibrate(context: Context) {
         val v: Vibrator = if (Build.VERSION.SDK_INT >= 31)
             (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator

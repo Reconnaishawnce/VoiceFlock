@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 import logging
 import os
 import re
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, selfcal, stills, suggest, transcribe, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, feeds, gallery, live, mobile, onnx_export, selfcal, sightings as sightings_mod, stills, suggest, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -61,6 +62,22 @@ class GroupPatch(BaseModel):
 
 class MembersIn(BaseModel):
     person_ids: list[int]
+
+
+class SightingIn(BaseModel):
+    at_ms: int | None = None
+    person_id: int | None = None
+    name: str
+    probability: float | None = None
+    flagged: bool = False
+    kind: str = "live"
+    source_id: int | None = None
+    device: str | None = None
+
+
+class SightingsIn(BaseModel):
+    items: list[SightingIn]
+    device: str | None = None
 
 
 class WipeIn(BaseModel):
@@ -288,6 +305,7 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                                            (p["id"],)).fetchone()[0]
         p["heard_in"] = person_sources(conn, p["id"], limit=50)
         p["glyph"] = person_glyph(conn, p["id"])
+        p["sightings"] = sightings_mod.list_(conn, person_id=p["id"], limit=40)
         p["groups"] = db.rows(conn, "SELECT g.id, g.name, g.alert FROM person_groups pg JOIN groups g ON g.id=pg.group_id WHERE pg.person_id=? ORDER BY g.name", (p["id"],))
         p["effective"] = mobile.effective_alert(p, p["groups"] and db.rows(conn,
             "SELECT g.* FROM person_groups pg JOIN groups g ON g.id=pg.group_id WHERE pg.person_id=? ORDER BY g.id", (p["id"],)) or [],
@@ -396,6 +414,8 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         info["password_required"] = bool(password)
         info["lan_ips"] = lan_ips()
         info["supervised"] = admin.supervised()
+        info["tailscale"] = sightings_mod.tailscale_info()
+        info["port"] = int(os.environ.get("VOICEFLOCK_PORT") or 8787)
         info["started_at"] = app.state.started_at
         info["queue"] = db.row(conn, "SELECT SUM(status='queued') AS queued, SUM(status='running') AS running,"
                                      " SUM(status='failed') AS failed, SUM(status='done') AS done FROM jobs")
@@ -1225,6 +1245,20 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         with db.tx(conn):
             conn.execute("UPDATE matches SET status='open', decided_at=NULL WHERE id=? AND status='rejected'", (mid,))
         return speaker_out(conn, db.row(conn, "SELECT * FROM source_speakers WHERE id=?", (m["source_speaker_id"],)))
+
+    @app.get("/api/sightings")
+    def get_sightings(since_ms: int | None = None, limit: int = 200, person_id: int | None = None, kinds: str | None = None,
+                      exclude_device: str | None = None, conn=Depends(get_conn)):
+        """The shared timeline. Phones poll with since_ms (and exclude_device = their own id to avoid echoes)."""
+        ks = tuple(k for k in (kinds or "").split(",") if k) or None
+        return {"sightings": sightings_mod.list_(conn, since_ms, min(limit, 1000), person_id, ks, exclude_device), "now_ms": int(time.time() * 1000)}
+
+    @app.post("/api/sightings")
+    def post_sightings(body: SightingsIn, conn=Depends(get_conn)):
+        """Laptop Live mode posts single live sightings; phones post batches of their detections."""
+        with db.tx(conn):
+            n = sightings_mod.add(conn, [i.model_dump() for i in body.items], default_device=body.device)
+        return {"added": n, "now_ms": int(time.time() * 1000)}
 
     @app.get("/api/alerts")
     def alerts(limit: int = 100, conn=Depends(get_conn)):

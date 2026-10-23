@@ -95,6 +95,8 @@ def test_open_set_flow_bulk_then_match(conn):
     n_prints_before = conn.execute("SELECT COUNT(*) FROM prints WHERE person_id=?", (res1[0].person_id,)).fetchone()[0]
     sid3, res3 = _run(conn, wav, TURNS, emb, name="ep3")
     assert res3[0].decision == "matched" and res3[0].person_id == res1[0].person_id
+    sg = conn.execute("SELECT kind, name, source_id FROM sightings WHERE person_id=?", (res1[0].person_id,)).fetchall()
+    assert len(sg) == 1 and sg[0][0] == "recording" and sg[0][1] == "Alice" and sg[0][2] == sid3   # logged on the shared timeline
     assert res3[0].candidates[0].name == "Alice" and res3[0].candidates[0].probability >= settings["match_threshold"]
     assert conn.execute("SELECT COUNT(*) FROM prints WHERE person_id=?", (res1[0].person_id,)).fetchone()[0] == n_prints_before
     m = db.row(conn, "SELECT status FROM matches WHERE source_speaker_id=? AND rank=1", (res3[0].source_speaker_id,))

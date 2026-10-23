@@ -9,7 +9,8 @@ import java.util.Date
 import java.util.Locale
 
 /** One "heard this voice" event. Kept on disk (JSON lines) so the log survives restarts. */
-data class Sighting(val at: Long, val personId: Int, val name: String, val probability: Float, val flagged: Boolean)
+data class Sighting(val at: Long, val personId: Int, val name: String, val probability: Float, val flagged: Boolean,
+                    val device: String = "phone", val source: String? = null)
 
 object Sightings {
     private const val MAX = 600
@@ -19,27 +20,40 @@ object Sightings {
         val f = file(ctx)
         if (!f.exists()) return emptyList()
         return f.readLines().mapNotNull { line ->
-            try { val j = JSONObject(line); Sighting(j.getLong("at"), j.getInt("pid"), j.getString("name"), j.getDouble("p").toFloat(), j.optBoolean("flag", false)) } catch (_: Exception) { null }
+            try { val j = JSONObject(line); Sighting(j.getLong("at"), j.getInt("pid"), j.getString("name"), j.getDouble("p").toFloat(), j.optBoolean("flag", false), j.optString("dev", "phone"), j.optString("src", "").ifEmpty { null }) } catch (_: Exception) { null }
         }.asReversed().take(MAX)
     }
 
+    private fun json(s: Sighting) = JSONObject().put("at", s.at).put("pid", s.personId).put("name", s.name).put("p", s.probability.toDouble()).put("flag", s.flagged).put("dev", s.device).put("src", s.source ?: "")
+
     @Synchronized
     fun add(ctx: Context, s: Sighting) {
-        val j = JSONObject().put("at", s.at).put("pid", s.personId).put("name", s.name).put("p", s.probability.toDouble()).put("flag", s.flagged)
-        file(ctx).appendText(j.toString() + "\n")
-        AppState.sightings.value = (listOf(s) + AppState.sightings.value).take(MAX)
+        file(ctx).appendText(json(s).toString() + "\n")
+        AppState.sightings.value = (listOf(s) + AppState.sightings.value).sortedByDescending { it.at }.take(MAX)
         if (file(ctx).length() > 400_000) compact(ctx)
+    }
+
+    /** Sightings that happened elsewhere (laptop Live mode, new recordings), merged in without duplicates. */
+    @Synchronized
+    fun addRemote(ctx: Context, items: List<Sighting>): List<Sighting> {
+        val have = AppState.sightings.value.map { Triple(it.at, it.name, it.device) }.toHashSet()
+        val fresh = items.filter { Triple(it.at, it.name, it.device) !in have }
+        if (fresh.isEmpty()) return fresh
+        file(ctx).appendText(fresh.joinToString("") { json(it).toString() + "\n" })
+        AppState.sightings.value = (fresh + AppState.sightings.value).sortedByDescending { it.at }.take(MAX)
+        if (file(ctx).length() > 400_000) compact(ctx)
+        return fresh
     }
 
     private fun compact(ctx: Context) {
         val keep = AppState.sightings.value.asReversed()
-        file(ctx).writeText(keep.joinToString("") { s -> JSONObject().put("at", s.at).put("pid", s.personId).put("name", s.name).put("p", s.probability.toDouble()).put("flag", s.flagged).toString() + "\n" })
+        file(ctx).writeText(keep.joinToString("") { s -> json(s).toString() + "\n" })
     }
 
     fun clear(ctx: Context) { file(ctx).delete(); AppState.sightings.value = emptyList() }
 
-    fun csv(list: List<Sighting>): String = "time,name,probability,alerted\n" + list.asReversed().joinToString("\n") {
-        "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(it.at))},\"${it.name.replace("\"", "'")}\",${"%.3f".format(Locale.US, it.probability)},${if (it.flagged) 1 else 0}"
+    fun csv(list: List<Sighting>): String = "time,name,probability,alerted,where\n" + list.asReversed().joinToString("\n") {
+        "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(it.at))},\"${it.name.replace("\"", "'")}\",${"%.3f".format(Locale.US, it.probability)},${if (it.flagged) 1 else 0},${it.device}${it.source?.let { s -> " (" + s.replace(",", " ") + ")" } ?: ""}"
     }
 
     fun time(at: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(at))

@@ -180,6 +180,12 @@ function heardInRich(list) {
   return list && list.length ? list.map((h) => `<div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})">${esc(h.name)}</a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech</span><div class="actions" style="margin:4px 0 0">${watchBtn(h)}</div>${clip(h.clip_url)}</div></div>`).join("") : `<span class="muted">(no other recordings)</span>`;
 }
 
+function sightingRow(x) {
+  const d = new Date(x.at_ms); const when = `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+  const where = x.kind === "phone" ? "📱 phone" : x.kind === "live" ? "💻 laptop" : `🎞 ${esc(x.source_name || "recording")}`;
+  const who = x.person_id ? `<a class="link" onclick="openPerson(${x.person_id})">${esc(x.name)}</a>` : esc(x.name);
+  return `<div class="item sighting"><div class="title">${who}${x.flagged ? ' <span class="bell on">🔔</span>' : ""} <span class="prob ${x.probability >= 0.9 ? "hi" : "mid"}">${pct(x.probability || 0)}</span></div><div class="sub">${when} · ${where}${x.kind === "recording" && x.source_id ? ` · <a class="link" onclick="openSource(${x.source_id})">open</a>` : ""}</div></div>`;
+}
 /* ---------------- HOME ---------------- */
 let OV = null;
 async function loadHome() {
@@ -188,6 +194,8 @@ async function loadHome() {
     const thr = Number(SETTINGS.match_threshold || 0.75);
     $("#alert-hint").textContent = `≥ ${pct(thr)} · confirm only when very sure (≥ ${pct(a.confirm_threshold)})`;
     api("/api/calibration").then((c) => { if (!c.fitted.raw && c.available.enough) $("#alert-hint").innerHTML += ` · <a class="link" onclick="go('settings')" title="the percentages are generic until then">calibrate from your ${c.available.labelled_speakers} decisions</a>`; }).catch(() => {});
+    api("/api/sightings?limit=25&kinds=live,phone").then((r) => { const el = $("#heard-live"); if (!el) return;
+      el.innerHTML = r.sightings.length ? r.sightings.map((x) => sightingRow(x)).join("") : empty("Nothing heard live yet. The laptop's Live tab and the phone app both log here."); }).catch(() => {});
     $("#alerts-known").innerHTML = a.known.length ? a.known.slice(0, 30).map((k) => `<div class="item">
       <div class="title"><a class="link" onclick="openPerson(${k.person_id})">${esc(k.person_name)}</a> in <a class="link" onclick="openSource(${k.source_id})">${esc(k.source_name)}</a> at ${fmtT(k.first_start_s)}${k.status === "confirmed" ? '<span class="pill named">confirmed</span>' : ""}</div>
       <div class="scoreline"><span class="prob ${probCls(k.probability, thr, a.confirm_threshold)}">${pct(k.probability)}</span><span class="muted">+${pct(k.margin)} over #2</span></div>
@@ -742,6 +750,7 @@ async function loadPersonDetail(id) {
           <div class="sub">Will say: “${esc(p.spoken)}”. <code>[NAME]</code> = ${esc(p.name)}; empty = default from Settings.</div>
         </details>
         <textarea class="notes" placeholder="Notes about this person (role, context, links…)" onblur="savePersonNotes(${p.id}, this.value)">${esc(p.notes || "")}</textarea>
+        ${(p.sightings || []).length ? `<h3>Timeline <span class="muted" style="text-transform:none;letter-spacing:0">· live on the laptop, on the phone, in new recordings</span></h3><div class="timeline-list">${p.sightings.slice(0, 15).map(sightingRow).join("")}</div>` : ""}
         <h3>Heard in ${p.heard_in.length} recordings</h3>
         ${p.heard_in.map((h) => `<div class="appear"><div class="hi">${thumb(h)}<div><a class="link" onclick="openSource(${h.id})"><b>${esc(h.name)}</b></a> <span class="muted">· ${fmtT(h.speech_seconds || 0)} of speech · <span class="pill">${esc(h.assignment)}</span></span>${clip(h.clip_url)}</div></div>
           <div class="actions">${watchBtn(h)}<button class="small" onclick="unassign(${h.speaker_id})" title="This recording is not them">Not them</button></div></div>`).join("") || '<p class="muted">No recordings yet (enrolled from the command line or imported).</p>'}
@@ -856,6 +865,7 @@ function renderLive(m) {
   if (m.alert && Date.now() - LIVE.lastAlert > 8000) {
     LIVE.lastAlert = Date.now();
     if (top.flagged && SETTINGS.alert_speak_on_laptop) runAlert(top.name, top.alert_sound, top.alert_message); else if ($("#live-beep").checked) beep();
+    api("/api/sightings", { method: "POST", body: { items: [{ kind: "live", person_id: top.person_id, name: top.name, probability: top.probability, flagged: !!top.flagged }] } }).catch(() => {});
     if ($("#live-notify").checked && "Notification" in window && Notification.permission === "granted") new Notification("VoiceFlock", { body: `${top.name} (${pct(top.probability)})` });
     LIVE.log.unshift(`${new Date().toLocaleTimeString()} — ${top.name} ${pct(top.probability)}`);
     $("#live-log").innerHTML = LIVE.log.slice(0, 50).map((l) => `<div class="item">${esc(l)}</div>`).join("");
@@ -913,7 +923,10 @@ async function renderPhone() {
     $("#export-status").textContent = es.path ? `Exporting to ${es.path}${es.exported_at ? ` (last written ${es.exported_at.slice(0, 16).replace("T", " ")} UTC${es.dirty ? ", changes pending" : ""})` : " (not written yet)"}.` : "(no export folder set yet)";
     const h = await api("/api/health"); const port = location.port || (location.protocol === "https:" ? 443 : 80);
     const addrs = (h.lan_ips || []).map((ip) => `http://${ip}:${port}`);
-    $("#phone-info").textContent = `Direct sync address (same Wi-Fi):\n  ${addrs.join("\n  ") || location.origin}\nPassword: ${h.password_required ? "the one in .env" : "none set"}\nIf the phone can't connect, use the library file instead (above).`;
+    const ts = h.tailscale || {}; const tsAddr = ts.https_url || (ts.dns_name ? `http://${ts.dns_name}:${h.port || port}` : null);
+    $("#phone-info").innerHTML = (tsAddr ? `<b>Over the internet (Tailscale):</b> <code>${esc(tsAddr)}</code> <button class="small" onclick="navigator.clipboard.writeText(${JSON.stringify(tsAddr)}).then(()=>toast('Copied'))">copy</button>${ts.https_url ? "" : ` <span class="muted">· for HTTPS (phone browser microphone), run once as admin: <code>tailscale serve --bg ${h.port || port}</code></span>`}<br>`
+      : ts.installed ? `<b>Tailscale</b> is installed but not connected: open the Tailscale app and sign in.<br>` : `<b>From anywhere:</b> install <a class="link" href="https://tailscale.com/download" target="_blank">Tailscale</a> on this laptop and on the phone (same account); this line then shows the address to paste into the app.<br>`)
+      + `<b>Same Wi-Fi only:</b> ${addrs.map((a) => `<code>${esc(a)}</code>`).join(" ") || esc(location.origin)}<br>Password: ${h.password_required ? "the one in .env" : "none set (set VOICEFLOCK_PASSWORD in .env before exposing this over the internet)"}`;
     const r = await fetch("/api/mobile/model.onnx", { method: "HEAD" }); const ms = $("#model-status");
     ms.textContent = r.status === 200 ? `laptop-side phone model ready (${Math.round((Number(r.headers.get("content-length")) || 0) / 1048576)} MB)` : "not exported on this laptop (the phone downloads it from GitHub anyway)";
   } catch (e) {}

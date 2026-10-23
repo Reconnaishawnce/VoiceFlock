@@ -234,3 +234,4 @@ details.transcript { margin-top:12px; }
 .hints button:hover { background:rgba(232,179,90,.18); }
 @media (max-width:760px) { .tr-line { grid-template-columns:50px 1fr; } .tr-who { grid-column:2; } .tr-x { grid-column:1 / -1; } }
 .why { margin-top:6px; font-size:12px; color:var(--muted); } .why b { color:var(--fg-2); font-weight:500; }
+.sighting .title { display:flex; gap:8px; align-items:center; } .timeline-list { max-height:360px; overflow:auto; }

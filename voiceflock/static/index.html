@@ -42,6 +42,7 @@
         <div class="legend"><span><i style="background:var(--s1)"></i>known</span><span><i style="background:var(--s3)"></i>unnamed</span></div>
         <div class="mapwrap"><canvas id="ov-map" height="380"></canvas><div id="ov-tip" class="tip hidden"></div></div>
       </div>
+      <div class="card col narrow"><h2>Heard live <span class="muted">laptop + phone</span></h2><div id="heard-live"></div></div>
       <div class="card col narrow"><h2>Most heard</h2><div id="ov-top"></div></div>
     </div>
     <div class="row">
@@ -161,7 +162,7 @@
           <textarea id="phone-edits" rows="3" placeholder='{"format":"voiceflock-phone-settings", ...}' style="width:100%"></textarea>
           <div class="actions"><button class="small" id="btn-phone-edits">Apply</button> <span id="phone-edits-msg" class="muted"></span></div>
         </details>
-        <pre id="phone-info" class="muted"></pre>
+        <div id="phone-info" class="muted" style="line-height:1.8"></div>
         <div class="actions"><button id="btn-export-model" class="small">Prepare phone model on this laptop</button> <span id="model-status" class="muted"></span></div>
       </details>
       <details open><summary><b>Version &amp; updates</b></summary>

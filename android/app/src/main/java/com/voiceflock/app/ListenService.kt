@@ -123,6 +123,8 @@ class ListenService : Service() {
                 nm.notify(Alerts.NOTIF_SERVICE, Alerts.serviceNotification(this, describe()))
                 val pcm = ShortArray(SR / 10)
                 var lastNotif = 0L; var notifText = ""
+                var lastSync = 0L
+                val syncing = java.util.concurrent.atomic.AtomicBoolean(false)
                 while (running) {
                     val n = record.read(pcm, 0, pcm.size)
                     if (n <= 0) continue
@@ -154,6 +156,21 @@ class ListenService : Service() {
                         }
                     }
                     identifyReq?.let { req -> stepIdentify(req, embedder, g) }
+                    // every 30 s: this phone's sightings up to the laptop, the laptop's down to the phone (notify on flagged ones)
+                    val tnow = System.currentTimeMillis()
+                    if (!oneShot && prefs.autoSync && Sync.connected(prefs) && tnow - lastSync > 30_000 && syncing.compareAndSet(false, true)) {
+                        lastSync = tnow
+                        thread(name = "voiceflock-sync") {
+                            try {
+                                kotlinx.coroutines.runBlocking {
+                                    try { Sync.pushSightings(this@ListenService, prefs) } catch (_: Exception) {}
+                                    val fresh = try { Sync.pullSightings(this@ListenService, prefs) } catch (_: Exception) { emptyList() }
+                                    for (s in fresh.filter { it.flagged && it.at > tnow - 10 * 60_000 }) Alerts.remoteNotification(this@ListenService, s)
+                                    if (tnow - prefs.lastSyncMs > 5 * 60_000) try { Sync.pullGallery(this@ListenService, prefs)?.let { reloadGallery(this@ListenService) }; prefs.lastSyncMs = tnow } catch (_: Exception) {}
+                                }
+                            } finally { syncing.set(false) }
+                        }
+                    }
                     if (oneShot && identifyReq == null) running = false
                 }
             } catch (e: Exception) {

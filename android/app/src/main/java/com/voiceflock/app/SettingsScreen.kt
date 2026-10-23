@@ -81,19 +81,42 @@ fun SettingsScreen() {
                 }) { Text("Fetch now") }
                 Spacer(Modifier.width(14.dp)); Text("Auto-refresh", Modifier.weight(1f)); Switch(autoFetch, { autoFetch = it; prefs.autoFetch = it }, colors = switchColors())
             }
-            Divider()
-            Label("Or straight from the laptop")
-            var url by remember { mutableStateOf(prefs.serverUrl) }
+        }
+
+        // ---------------------------------------------------------------- laptop connection
+        Section("Laptop connection", trailing = { if (Sync.connected(prefs)) Pill("set", VF.Ok, VF.Ok.copy(alpha = .14f)) else Pill("off") }) {
+            Hint("Works from anywhere with Tailscale on both devices (free): the laptop's Settings → Phone shows the address to paste here. On the same Wi-Fi the http://192.168… address works too. With a connection the phone keeps itself in step: voices and alert edits both ways, your detections and the laptop's in one Heard list, and links you share to VoiceFlock get queued on the laptop.")
+            var url by remember { mutableStateOf(if (Sync.connected(prefs)) prefs.serverUrl else "") }
             var pw by remember { mutableStateOf(prefs.password) }
-            OutlinedTextField(url, { url = it }, label = { Text("VoiceFlock address (same Wi-Fi or Tailscale)") }, placeholder = { Text("http://192.168.1.20:8787") }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = fieldShape)
-            OutlinedTextField(pw, { pw = it }, label = { Text("Password, if set in .env") }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = fieldShape)
-            OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = btnShape, onClick = {
-                prefs.serverUrl = url; prefs.password = pw; busy = true
-                scope.launch {
-                    try { Sync.run(ctx, prefs) { status = it }; reloadGallery(ctx) } catch (e: Exception) { status = "sync failed: ${e.message}" }
-                    modelStatus = modelLine(ctx); busy = false
+            var test by remember { mutableStateOf(prefs.lastLaptop) }
+            var auto by remember { mutableStateOf(prefs.autoSync) }
+            var share by remember { mutableStateOf(prefs.shareMode) }
+            OutlinedTextField(url, { url = it }, label = { Text("Laptop address") }, placeholder = { Text("http://thinkpad.tailxxxx.ts.net:8787") }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = fieldShape)
+            OutlinedTextField(pw, { pw = it }, label = { Text("Password (VOICEFLOCK_PASSWORD in the laptop's .env)") }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = fieldShape)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = !busy && url.isNotBlank(), modifier = Modifier.weight(1f), shape = btnShape, onClick = {
+                    prefs.serverUrl = url; prefs.password = pw; busy = true; test = "testing…"
+                    scope.launch { test = try { "Connected: " + Sync.health(prefs) } catch (e: Exception) { "Not reachable: ${e.message}" }; busy = false }
+                }) { Text("Test") }
+                Button(enabled = !busy && url.isNotBlank(), modifier = Modifier.weight(1f), shape = btnShape, onClick = {
+                    prefs.serverUrl = url; prefs.password = pw; busy = true
+                    scope.launch { status = try { "sync: " + Sync.syncAll(ctx, prefs, force = true) } catch (e: Exception) { "sync failed: ${e.message}" }; modelStatus = modelLine(ctx); busy = false }
+                }) { Text(if (busy) "Working…" else "Sync now") }
+            }
+            if (test.isNotEmpty()) Hint(test)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) { TwoLine("Keep in sync automatically", "When the app opens and every 30 s while listening.") }
+                Switch(auto, { auto = it; prefs.autoSync = it }, colors = switchColors())
+            }
+            TwoLine("Links shared to VoiceFlock go to", null)
+            @OptIn(ExperimentalMaterial3Api::class)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                listOf("bulk" to "Library", "review" to "Review queue").forEachIndexed { i, (v, label) ->
+                    SegmentedButton(share == v, { share = v; prefs.shareMode = v }, SegmentedButtonDefaults.itemShape(i, 2),
+                        colors = SegmentedButtonDefaults.colors(activeContainerColor = VF.Amber.copy(alpha = .18f), activeContentColor = VF.Amber, inactiveContainerColor = VF.Surface2, inactiveContentColor = VF.Fg2, activeBorderColor = VF.Line, inactiveBorderColor = VF.Line)) { Text(label) }
                 }
-            }) { Text(if (busy) "Working…" else "Sync voices + model from laptop") }
+            }
+            Hint("Share a YouTube link from any app → VoiceFlock, and the laptop downloads and processes it.")
         }
 
         // ---------------------------------------------------------------- model

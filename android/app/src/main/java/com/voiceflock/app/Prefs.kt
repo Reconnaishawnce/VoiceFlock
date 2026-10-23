@@ -46,18 +46,18 @@ class Prefs(context: Context) {
 
     fun messageOverride(personId: Int): String? = sp.getString("msg_$personId", null)
     fun setMessageOverride(personId: Int, msg: String?) =
-        sp.edit().apply { if (msg.isNullOrBlank()) remove("msg_$personId") else putString("msg_$personId", msg) }.apply()
+        sp.edit().apply { if (msg.isNullOrBlank()) remove("msg_$personId") else putString("msg_$personId", msg); putBoolean("edits_dirty", true) }.apply()
     fun soundOverride(personId: Int): String? = sp.getString("snd_$personId", null)
     fun setSoundOverride(personId: Int, snd: String?) =
-        sp.edit().apply { if (snd.isNullOrBlank()) remove("snd_$personId") else putString("snd_$personId", snd) }.apply()
+        sp.edit().apply { if (snd.isNullOrBlank()) remove("snd_$personId") else putString("snd_$personId", snd); putBoolean("edits_dirty", true) }.apply()
 
     // ---- package (group) overrides made on the phone
     fun groupAlertOverride(gid: Int): Boolean? = if (sp.contains("galert_$gid")) sp.getBoolean("galert_$gid", false) else null
-    fun setGroupAlertOverride(gid: Int, on: Boolean) = sp.edit().putBoolean("galert_$gid", on).apply()
+    fun setGroupAlertOverride(gid: Int, on: Boolean) = sp.edit().putBoolean("galert_$gid", on).putBoolean("edits_dirty", true).apply()
     fun groupSoundOverride(gid: Int): String? = sp.getString("gsnd_$gid", null)
-    fun setGroupSoundOverride(gid: Int, v: String?) = sp.edit().apply { if (v.isNullOrBlank()) remove("gsnd_$gid") else putString("gsnd_$gid", v) }.apply()
+    fun setGroupSoundOverride(gid: Int, v: String?) = sp.edit().apply { if (v.isNullOrBlank()) remove("gsnd_$gid") else putString("gsnd_$gid", v); putBoolean("edits_dirty", true) }.apply()
     fun groupMessageOverride(gid: Int): String? = sp.getString("gmsg_$gid", null)
-    fun setGroupMessageOverride(gid: Int, v: String?) = sp.edit().apply { if (v.isNullOrBlank()) remove("gmsg_$gid") else putString("gmsg_$gid", v) }.apply()
+    fun setGroupMessageOverride(gid: Int, v: String?) = sp.edit().apply { if (v.isNullOrBlank()) remove("gmsg_$gid") else putString("gmsg_$gid", v); putBoolean("edits_dirty", true) }.apply()
 
     fun groupAlert(g: Group): Boolean = groupAlertOverride(g.id) ?: g.alert
     fun groupSound(g: Group): String? = groupSoundOverride(g.id) ?: g.alertSound
@@ -77,6 +77,32 @@ class Prefs(context: Context) {
     fun messageFor(p: Person, g: Gallery): String = Gallery.render(
         messageOverride(p.id) ?: p.alertMessage ?: p.groupIds.firstNotNullOfOrNull { gid -> g.groupById[gid]?.let { groupMessage(it) } }
             ?: defaultMessage.ifBlank { g.defaultMessage }, p.name)
+
+    /** Laptop connection (Tailscale or same Wi-Fi): keep both devices in step automatically. */
+    var autoSync: Boolean
+        get() = sp.getBoolean("auto_sync", true)
+        set(v) = sp.edit().putBoolean("auto_sync", v).apply()
+    /** Where links shared to VoiceFlock go on the laptop: bulk (library) or review. */
+    var shareMode: String
+        get() = sp.getString("share_mode", "bulk") ?: "bulk"
+        set(v) = sp.edit().putString("share_mode", v).apply()
+    val deviceId: String
+        get() = sp.getString("device_id", null) ?: ("phone-" + java.util.UUID.randomUUID().toString().take(8)).also { sp.edit().putString("device_id", it).apply() }
+    var sightingsPushedMs: Long
+        get() = sp.getLong("sightings_pushed_ms", 0L)
+        set(v) = sp.edit().putLong("sightings_pushed_ms", v).apply()
+    var sightingsPulledMs: Long
+        get() = sp.getLong("sightings_pulled_ms", 0L)
+        set(v) = sp.edit().putLong("sightings_pulled_ms", v).apply()
+    var lastSyncMs: Long
+        get() = sp.getLong("last_sync_ms", 0L)
+        set(v) = sp.edit().putLong("last_sync_ms", v).apply()
+    var editsDirty: Boolean
+        get() = sp.getBoolean("edits_dirty", false)
+        set(v) = sp.edit().putBoolean("edits_dirty", v).apply()
+    var lastLaptop: String
+        get() = sp.getString("last_laptop", "") ?: ""
+        set(v) = sp.edit().putString("last_laptop", v).apply()
 
     /** Where the library can be fetched from without the laptop (Dropbox / Drive / GitHub link). */
     var libraryUrl: String
@@ -112,6 +138,6 @@ class Prefs(context: Context) {
     fun alertOverride(personId: Int): Boolean? =
         if (sp.contains("alert_$personId")) sp.getBoolean("alert_$personId", false) else null
 
-    fun setAlertOverride(personId: Int, on: Boolean) = sp.edit().putBoolean("alert_$personId", on).apply()
+    fun setAlertOverride(personId: Int, on: Boolean) = sp.edit().putBoolean("alert_$personId", on).putBoolean("edits_dirty", true).apply()
     fun clearAlertOverride(personId: Int) = sp.edit().remove("alert_$personId").apply()
 }
