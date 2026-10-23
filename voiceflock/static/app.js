@@ -320,18 +320,27 @@ $("#btn-live").onclick = async () => {
   if (!navigator.mediaDevices?.getUserMedia) { st.textContent = "Microphone needs localhost or HTTPS."; return; }
   if ($("#live-notify").checked && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
-    const ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true, channelCount: 1 } });
+    let ac;
+    try { ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 }); } catch (e) { ac = new (window.AudioContext || window.webkitAudioContext)(); }
     const src = ac.createMediaStreamSource(stream);
     const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/live");
     ws.binaryType = "arraybuffer";
-    const ratio = ac.sampleRate / 16000; // browsers may ignore the requested rate; downsample if so
+    const ratio = ac.sampleRate / 16000; // browsers may ignore the requested rate; box-filter downsample if so (no aliasing)
     const proc = ac.createScriptProcessor(4096, 1, 1);
+    let carry = new Float32Array(0);
     proc.onaudioprocess = (e) => {
       if (ws.readyState !== 1) return;
-      const inp = e.inputBuffer.getChannelData(0); const n = Math.floor(inp.length / ratio); const out = new Int16Array(n);
+      const raw = e.inputBuffer.getChannelData(0);
+      const inp = new Float32Array(carry.length + raw.length); inp.set(carry); inp.set(raw, carry.length);
+      const n = Math.floor(inp.length / ratio); const out = new Int16Array(n);
       let peak = 0;
-      for (let i = 0; i < n; i++) { const v = Math.max(-1, Math.min(1, inp[Math.floor(i * ratio)])); out[i] = v * 32767; peak = Math.max(peak, Math.abs(v)); }
+      for (let i = 0; i < n; i++) {
+        const a = i * ratio, b = (i + 1) * ratio; let acc = 0, cnt = 0;
+        for (let j = Math.floor(a); j < Math.min(inp.length, Math.ceil(b)); j++) { acc += inp[j]; cnt++; }
+        const v = Math.max(-1, Math.min(1, cnt ? acc / cnt : 0)); out[i] = v * 32767; peak = Math.max(peak, Math.abs(v));
+      }
+      carry = inp.slice(Math.floor(n * ratio));
       $("#live-level").style.width = Math.min(100, peak * 140) + "%";
       ws.send(out.buffer);
     };
@@ -354,7 +363,7 @@ function stopLive() {
 }
 function renderLive(m) {
   const now = $("#live-now"); const thr = Number(SETTINGS.match_threshold || 0.75);
-  if (!m.speech) { now.className = "livenow"; now.innerHTML = `<div class="muted">silence · ${m.level_db} dBFS</div>`; return; }
+  if (!m.speech) { now.className = "livenow"; now.innerHTML = `<div class="muted">${m.speech_s > 0 ? `listening… ${m.speech_s}s of speech buffered` : "silence"} · ${m.level_db} dBFS</div>`; return; }
   const top = m.candidates[0];
   if (!top) { now.innerHTML = `<div class="who muted">speech, empty gallery</div>`; return; }
   const known = top.kind === "named";
@@ -362,7 +371,7 @@ function renderLive(m) {
   now.innerHTML = `<div class="muted">${m.alert && top.flagged ? "🔔 FLAGGED VOICE" : m.alert ? "KNOWN VOICE" : top.probability >= thr ? "unnamed voice from the library" : "no confident match"}</div>
     <div class="who" style="${m.alert ? "" : "opacity:.7"}">${esc(top.name)} <span class="prob ${probCls(top.probability, thr, SETTINGS.confirm_threshold || 0.9)}" style="font-size:18px">${pct(top.probability)}</span></div>
     <div class="meter"><i style="width:${pct(top.probability)}"></i></div>
-    <div class="others">${m.candidates.slice(1).map((c) => `${esc(c.name)} ${pct(c.probability)}`).join(" · ") || ""}</div>`;
+    <div class="others">${m.candidates.slice(1).map((c) => `${esc(c.name)} ${pct(c.probability)}`).join(" · ") || ""}<span style="float:right">${m.speech_s}s of speech</span></div>`;
   if (m.alert && Date.now() - LIVE.lastAlert > 8000) {
     LIVE.lastAlert = Date.now();
     if ($("#live-beep").checked) beep();

@@ -77,12 +77,12 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "calib_snorm_b": {"default": -3.6, "type": "float", "group": "Scoring",
         "label": "Default calibration offset (s-norm)", "help": ""},
     # --- live listening ---
-    "live_window_s": {"default": 3.0, "type": "float", "group": "Live",
-        "label": "Live window (s)", "help": "Seconds of audio embedded at a time in Live mode."},
+    "live_window_s": {"default": 4.0, "type": "float", "group": "Live",
+        "label": "Live window (s of speech)", "help": "Seconds of actual speech (pauses skipped) embedded at a time in Live mode."},
     "live_hop_s": {"default": 1.0, "type": "float", "group": "Live",
         "label": "Live update interval (s)", "help": "How often Live mode re-scores."},
     "live_min_level_db": {"default": -45.0, "type": "float", "group": "Live",
-        "label": "Live silence threshold (dBFS)", "help": "Windows quieter than this are treated as silence."},
+        "label": "Live silence floor (dBFS)", "help": "Frames quieter than this are never speech; the floor also adapts to room noise."},
     # --- models ---
     "hf_token": {"default": "", "type": "secret", "group": "Models",
         "label": "HuggingFace token",

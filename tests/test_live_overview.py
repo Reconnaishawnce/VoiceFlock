@@ -29,18 +29,20 @@ def test_live_matcher_silence_then_alert(conn):
     rng = np.random.default_rng(0)
     pid, c, settings = gallery_with(conn, rng)
     g = gallery.load_gallery(conn, settings)
-    m = live.LiveMatcher(FakeEmbedder(speaker_cluster(rng, c, 1)[0]), lambda: g, window_s=1.0, hop_s=0.5, match_threshold=0.75)
+    m = live.LiveMatcher(FakeEmbedder(speaker_cluster(rng, c, 1)[0]), lambda: g, window_s=2.0, hop_s=0.5, match_threshold=0.75)
     silence = np.zeros(audio.SR, dtype=np.int16)
     frames = m.feed(silence)
     assert len(frames) == 2 and all(not f.speech and not f.candidates for f in frames)
-    loud = (np.random.default_rng(1).normal(size=audio.SR) * 3000).astype(np.int16)
+    loud = (np.random.default_rng(1).normal(size=audio.SR * 2) * 3000).astype(np.int16)
     frames = m.feed(loud)
     assert frames and frames[-1].speech and frames[-1].candidates[0]["name"] == "Alice"
-    # smoothing: first speech window after silence averages with empty history -> lower than instant
-    assert frames[0].candidates[0]["probability"] <= frames[0].candidates[0]["instant"] + 1e-9
-    assert frames[-1].alert is True
-    d = frames[-1].as_dict()
-    assert d["type"] == "frame" and set(d) >= {"t", "level_db", "speech", "candidates", "alert"}
+    assert frames[-1].speech_s == 2.0 and frames[-1].alert is True
+    # only speech frames are buffered: a 3 s pause clears the buffer and the history
+    frames = m.feed(np.zeros(audio.SR * 3, dtype=np.int16))
+    assert not frames[-1].speech and frames[-1].speech_s == 0.0 and m.history == []
+    d = m.feed(loud)[-1].as_dict()
+    assert d["type"] == "frame" and set(d) >= {"t", "level_db", "speech", "speech_s", "candidates", "alert"}
+    assert d["candidates"][0]["name"] == "Alice"
 
 
 def test_live_websocket_roundtrip(data_dir, conn, monkeypatch):
