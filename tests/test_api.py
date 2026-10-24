@@ -231,12 +231,12 @@ def test_sightings_timeline(client, conn):
     r = client.post("/api/sightings", json={"items": [{"kind": "live", "person_id": pid, "name": "Alice", "probability": 0.93, "flagged": True}]}).json()
     assert r["added"] == 1
     r = client.post("/api/sightings", json={"device": "phone-1", "items": [
-        {"kind": "phone", "person_id": pid, "name": "Alice", "probability": 0.88, "flagged": True, "at_ms": 1700000000000},
+        {"kind": "phone", "person_id": pid, "name": "Alice", "probability": 0.88, "flagged": True, "at_ms": 1700000000000, "session": "Town hall, Oct 24"},
         {"kind": "phone", "person_id": pid, "name": "Alice", "probability": 0.88, "flagged": True, "at_ms": 1700000000000},   # duplicate upload
         {"kind": "bogus", "name": "x"}]}).json()
     assert r["added"] == 1
     allv = client.get("/api/sightings").json()["sightings"]
-    assert [x["kind"] for x in allv] == ["live", "phone"] and allv[1]["device"] == "phone-1"
+    assert [x["kind"] for x in allv] == ["live", "phone"] and allv[1]["device"] == "phone-1" and allv[1]["session_name"] == "Town hall, Oct 24"
     # the phone asks for everything after its watermark, excluding itself
     mine = client.get("/api/sightings", params={"since_ms": 1700000000000, "exclude_device": "phone-1"}).json()["sightings"]
     assert len(mine) == 1 and mine[0]["kind"] == "live"

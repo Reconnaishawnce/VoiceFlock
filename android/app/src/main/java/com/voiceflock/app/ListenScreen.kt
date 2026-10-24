@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +44,7 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
     val identify = rememberMicPermission { ListenService.identify(ctx) }
     val ready = g != null && Gallery.modelFile(ctx).exists()
     val alertNow = det?.alert == true && listening
+    val history by Sessions.history.collectAsStateWithLifecycle()
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -66,6 +68,7 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
                 if (!ready) TextButton(onClick = openSettings) { Text(if (g == null) "Import a library →" else "Download the model →") }
             }
         }
+        item { SessionCard(ready, start) }
         item { NowCard(det, listening, thr, g) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -86,6 +89,7 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
                 if (sightings.isNotEmpty()) TextButton(onClick = { Sightings.clear(ctx) }) { Text("Clear", color = VF.Muted) }
             }
         }
+        if (history.isNotEmpty()) item { PastSessions(history) }
         if (sightings.isEmpty()) item { Empty(if (g == null) "Sightings appear here once a library is on the phone." else "Nothing heard yet. Known voices above the threshold are logged here, flagged ones also alert, and the laptop's detections appear too when it is connected.") }
         else {
             val days = sightings.groupBy { Sightings.dayLabel(it.at) }
@@ -267,5 +271,138 @@ fun IdentifySheet(state: IdentifyState, onClose: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+
+/* ---------------- event sessions ---------------- */
+@Composable
+fun SessionCard(ready: Boolean, startListening: () -> Unit) {
+    val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
+    val active by Sessions.active.collectAsStateWithLifecycle()
+    val tally by Sessions.tally.collectAsStateWithLifecycle()
+    val listening by AppState.listening.collectAsStateWithLifecycle()
+    var showStart by remember { mutableStateOf(false) }
+    var summary by remember { mutableStateOf<Session?>(null) }
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(active?.id) { while (active != null) { kotlinx.coroutines.delay(1000); tick++ } }
+    if (showStart) StartSessionDialog(onClose = { showStart = false }) { name, place, record ->
+        Sessions.start(ctx, name, place, record); showStart = false
+        if (!listening) startListening()
+    }
+    summary?.let { SessionSummarySheet(it, prefs) { summary = null } }
+    val s = active
+    if (s == null) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            TextButton(enabled = ready, onClick = { showStart = true }) { Text("Start a session for an event…", color = VF.Amber) }
+        }
+        return
+    }
+    Section(s.label, trailing = { Pill(Sessions.fmt(s.durationS) + if (s.record) " · ● rec" else "", VF.Amber, VF.Amber.copy(alpha = .14f)) }) {
+        key(tick) { }
+        val rows = tally.values.sortedByDescending { it.seconds }
+        if (rows.isEmpty()) Hint(if (listening) "Nobody known has spoken yet." else "Listening is off. Press the microphone to count voices.")
+        rows.take(8).forEach { t ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text((if (t.flagged) "🔔 " else "") + t.name, Modifier.weight(1f), fontWeight = FontWeight.Medium, maxLines = 1)
+                Text("${Sessions.fmt(t.seconds.toInt())} · ${t.hits}×", color = VF.Muted, style = MaterialTheme.typography.bodySmall)
+            }
+            ProbBar((t.seconds / maxOf(1f, rows.first().seconds)).coerceIn(0.02f, 1f), 2f, height = 3.dp)
+        }
+        if (rows.size > 8) Hint("+${rows.size - 8} more")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), onClick = { summary = Sessions.end(ctx) }) { Text("End session") }
+        }
+    }
+}
+
+@Composable
+fun StartSessionDialog(onClose: () -> Unit, onStart: (String, String, Boolean) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var place by remember { mutableStateOf("") }
+    var record by remember { mutableStateOf(false) }
+    AlertDialog(onDismissRequest = onClose, containerColor = VF.Surface,
+        title = { Text("New session") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Hint("Everything heard until you end it is counted under this name and tagged on the laptop's timeline.")
+                OutlinedTextField(name, { name = it }, label = { Text("Event") }, placeholder = { Text("Finance committee hearing") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(place, { place = it }, label = { Text("Place (optional)") }, placeholder = { Text("Room 215") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { TwoLine("Also record the audio", "Kept on the phone (about 115 MB per hour) so you can send it to the laptop afterwards for a full transcript. Off = nothing is stored.") }
+                    Switch(record, { record = it }, colors = switchColors())
+                }
+            }
+        },
+        confirmButton = { Button(enabled = name.isNotBlank(), onClick = { onStart(name, place, record) }) { Text("Start") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SessionSummarySheet(s0: Session, prefs: Prefs, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var s by remember { mutableStateOf(s0) }
+    var busy by remember { mutableStateOf(false) }
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = VF.Surface, dragHandle = { BottomSheetDefaults.DragHandle(color = VF.Surface3) }) {
+        Column(Modifier.padding(20.dp, 0.dp, 20.dp, 28.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(s.label, style = MaterialTheme.typography.headlineMedium)
+            Hint(java.text.SimpleDateFormat("EEE d MMM, HH:mm", java.util.Locale.US).format(java.util.Date(s.startedAt)) + " · " + Sessions.fmt(s.durationS) + " · ${s.tally.size} known voices")
+            if (s.tally.isEmpty()) Empty("No known voices were heard during this session.")
+            s.tally.forEach { t ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Avatar(t.personId, t.name, 36.dp, flagged = t.flagged, photo = AppState.gallery.value?.people?.firstOrNull { it.id == t.personId }?.photo)
+                    Column(Modifier.weight(1f)) { TwoLine(t.name, "spoke ~${Sessions.fmt(t.seconds.toInt())} · heard ${t.hits}× · ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(t.first))}–${java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(t.last))}") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), onClick = {
+                    ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "VoiceFlock session: ${s.label}").putExtra(Intent.EXTRA_TEXT, Sessions.summaryText(s)), "Share summary"))
+                }) { Text("Share summary") }
+                OutlinedButton(modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), onClick = {
+                    ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/csv").putExtra(Intent.EXTRA_SUBJECT, "VoiceFlock session ${s.label}.csv").putExtra(Intent.EXTRA_TEXT, Sessions.csv(s)), "Share CSV"))
+                }) { Text("Share CSV") }
+            }
+            if (s.audioPath != null) {
+                val f = java.io.File(s.audioPath!!)
+                Hint("Recording kept on this phone: ${f.length() shr 20} MB." + if (s.sent) " Sent to the laptop." else "")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !busy && !s.sent && Sync.connected(prefs), modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), onClick = {
+                        busy = true
+                        scope.launch {
+                            try {
+                                Sync.uploadClip(prefs, f, s.label.replace(Regex("[\\\\/:*?\"<>|]"), " "), "Phone session: ${s.label}, ${Sessions.fmt(s.durationS)}. ${Sessions.summaryText(s)}")
+                                s = s.copy(sent = true); Sessions.update(ctx, s); android.widget.Toast.makeText(ctx, "Sent: the laptop will diarize and transcribe it", android.widget.Toast.LENGTH_LONG).show()
+                            } catch (e: Exception) { android.widget.Toast.makeText(ctx, "Send failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show() }
+                            busy = false
+                        }
+                    }) { Text(if (busy) "Sending…" else if (s.sent) "Sent" else "Send recording to laptop") }
+                    OutlinedButton(enabled = !busy, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), onClick = { f.delete(); s = s.copy(audioPath = null); Sessions.update(ctx, s) }) { Text("Delete audio") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { Sessions.delete(ctx, s); onClose() }) { Text("Delete session", color = VF.Bad) }
+                Spacer(Modifier.weight(1f))
+                OutlinedButton(onClick = onClose, shape = RoundedCornerShape(12.dp)) { Text("Done") }
+            }
+        }
+    }
+}
+
+@Composable
+fun PastSessions(history: List<Session>) {
+    val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
+    var open by remember { mutableStateOf<Session?>(null) }
+    open?.let { SessionSummarySheet(it, prefs) { open = null } }
+    Section("Sessions", trailing = { Pill("${history.size}") }) {
+        history.take(5).forEach { s ->
+            RowItem(onClick = { open = s }, leading = { Box(Modifier.size(36.dp).clip(CircleShape).background(VF.Surface3), contentAlignment = Alignment.Center) { Text("📍") } }) {
+                TwoLine(s.label, java.text.SimpleDateFormat("EEE d MMM HH:mm", java.util.Locale.US).format(java.util.Date(s.startedAt)) + " · " + Sessions.fmt(s.durationS) + " · ${s.tally.size} voices" + (if (s.audioPath != null) " · audio kept" else ""))
+            }
+        }
+        if (history.size > 5) Hint("+${history.size - 5} older")
     }
 }

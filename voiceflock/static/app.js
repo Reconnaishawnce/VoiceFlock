@@ -209,7 +209,7 @@ function timelineRow(t) {
 }
 function sightingRow(x) {
   const d = new Date(x.at_ms); const when = `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
-  const where = x.kind === "phone" ? "📱 phone" : x.kind === "live" ? "💻 laptop" : `🎞 ${esc(x.source_name || "recording")}`;
+  const where = (x.kind === "phone" ? "📱 phone" : x.kind === "live" ? "💻 laptop" : `🎞 ${esc(x.source_name || "recording")}`) + (x.session_name ? ` · ${esc(x.session_name)}` : "");
   const who = x.person_id ? `<a class="link" onclick="openPerson(${x.person_id})">${esc(x.name)}</a>` : esc(x.name);
   return `<div class="item sighting"><div class="title">${who}${x.flagged ? ' <span class="bell on">🔔</span>' : ""} <span class="prob ${x.probability >= 0.9 ? "hi" : "mid"}">${pct(x.probability || 0)}</span></div><div class="sub">${when} · ${where}${x.kind === "recording" && x.source_id ? ` · <a class="link" onclick="openSource(${x.source_id})">open</a>` : ""}</div></div>`;
 }

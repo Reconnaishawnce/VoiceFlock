@@ -85,6 +85,7 @@ class PairIn(BaseModel):
 
 
 class SightingIn(BaseModel):
+    session: str | None = None
     at_ms: int | None = None
     person_id: int | None = None
     name: str

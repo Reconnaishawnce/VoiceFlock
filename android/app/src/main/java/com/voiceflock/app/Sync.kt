@@ -205,7 +205,7 @@ object Sync {
         if (mine.isEmpty()) return@withContext 0
         val items = org.json.JSONArray()
         for (s in mine) items.put(org.json.JSONObject().put("kind", "phone").put("at_ms", s.at).put("person_id", if (s.personId > 0) s.personId else org.json.JSONObject.NULL)
-            .put("name", s.name).put("probability", s.probability.toDouble()).put("flagged", s.flagged))
+            .put("name", s.name).put("probability", s.probability.toDouble()).put("flagged", s.flagged).put("session", s.session ?: org.json.JSONObject.NULL))
         post(prefs, "/api/sightings", org.json.JSONObject().put("device", prefs.deviceId).put("items", items))
         prefs.sightingsPushedMs = mine.maxOf { it.at }
         mine.size

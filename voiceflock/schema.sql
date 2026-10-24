@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS sightings (
   kind TEXT NOT NULL,                      -- live | phone | recording
   source_id INTEGER,
   device TEXT,                             -- phone id for phone sightings
+  session_name TEXT,                       -- phone event session ("Finance committee, room 215"), if any
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   UNIQUE(kind, device, at_ms, name)
 );

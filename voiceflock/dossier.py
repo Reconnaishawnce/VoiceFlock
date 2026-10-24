@@ -79,8 +79,9 @@ def timeline(conn: sqlite3.Connection, pid: int, limit: int = 200) -> list[dict]
                     "watch_at": r["watch_at"], "assignment": r["assignment"]})
     for r in db.rows(conn, "SELECT s.*, src.name AS source_name FROM sightings s LEFT JOIN sources src ON src.id=s.source_id"
                            " WHERE s.person_id=? AND s.kind IN ('live','phone') ORDER BY s.at_ms DESC LIMIT ?", (pid, limit)):
-        out.append({"at_ms": int(r["at_ms"]), "kind": r["kind"], "label": "heard live on the laptop" if r["kind"] == "live" else "heard by the phone",
-                    "probability": r["probability"], "flagged": bool(r["flagged"]), "device": r["device"]})
+        ses = r["session_name"] if "session_name" in r.keys() else None
+        out.append({"at_ms": int(r["at_ms"]), "kind": r["kind"], "label": ("heard live on the laptop" if r["kind"] == "live" else "heard by the phone") + (f" at {ses}" if ses else ""),
+                    "probability": r["probability"], "flagged": bool(r["flagged"]), "device": r["device"], "session": ses})
     out.sort(key=lambda x: -x["at_ms"])
     return out[:limit]
 

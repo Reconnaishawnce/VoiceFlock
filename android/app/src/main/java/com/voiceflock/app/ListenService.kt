@@ -117,6 +117,7 @@ class ListenService : Service() {
         val top = d.top.firstOrNull() ?: return
         if (oneShot || !d.speech) return
         if (top.probability >= threshold && (top.person.kind == "named" || top.flagged)) {
+            Sessions.noteSpeech(this, top.person.id, top.person.name, g.hopS, top.flagged)
             val now = System.currentTimeMillis()
             if (now - (lastSeenAt[top.person.id] ?: 0L) > prefs.cooldownSeconds * 1000L) {
                 lastSeenAt[top.person.id] = now
@@ -127,7 +128,8 @@ class ListenService : Service() {
                         val f = File(dir, "alert-$now.wav"); writeWav(f, ringSnapshot()); clipPath = f.path
                     } catch (_: Exception) {}
                 }
-                Sightings.add(this, Sighting(now, top.person.id, top.person.name, top.probability, d.alert, clip = clipPath))
+                Sightings.add(this, Sighting(now, top.person.id, top.person.name, top.probability, d.alert, clip = clipPath, session = Sessions.active.value?.label))
+                Sessions.noteHit(this, top.person.id, top.person.name, now, d.alert)
                 if (d.alert) {
                     Alerts.voiceAlert(this, top.person, top.probability)
                     Alerts.performAlert(this, top.person.name, prefs.soundFor(top.person, g), prefs.messageFor(top.person, g), prefs.demoMode)
@@ -162,6 +164,7 @@ class ListenService : Service() {
             var embedder: Embedder? = null
             var record: AudioRecord? = null
             var remote: RemoteLive? = null
+            var rec: WavWriter? = null; var recPath: String? = null
             try {
                 var g: Gallery = gallery0!!
                 fun threshold() = if (prefs.thresholdOverride > 0f) prefs.thresholdOverride else (remote?.threshold ?: g.threshold)
@@ -195,6 +198,10 @@ class ListenService : Service() {
                     val db = 20 * log10(sqrt(acc / n) + 1e-9)
                     AppState.level.value = ((db + 60) / 50).toFloat().coerceIn(0f, 1f)
                     ringWrite(pcm, n)
+                    // session recording (opt-in per session): open, append, close as the session comes and goes
+                    val ses = Sessions.active.value
+                    if (ses?.record == true && ses.audioPath != null) { if (rec == null || recPath != ses.audioPath) { try { rec?.close() } catch (_: Exception) {}; rec = WavWriter(ses.audioPath!!); recPath = ses.audioPath }; rec!!.write(pcm, n) }
+                    else if (rec != null) { try { rec!!.close() } catch (_: Exception) {}; rec = null; recPath = null }
                     identifyReq?.let { req -> if (remote != null || req.raw.size < 160) req.raw.add(pcm.copyOf(n)) }
                     val cur = AppState.gallery.value
                     if (cur != null && cur !== g) { g = cur; if (remote == null) matcher = newMatcher(); nm.notify(Alerts.NOTIF_SERVICE, Alerts.serviceNotification(this, describe())) }
@@ -240,6 +247,7 @@ class ListenService : Service() {
                 try { record?.stop() } catch (_: Exception) {}
                 record?.release()
                 remote?.close()
+                try { rec?.close() } catch (_: Exception) {}
                 embedder?.close()
                 AppState.listening.value = false
                 AppState.level.value = 0f

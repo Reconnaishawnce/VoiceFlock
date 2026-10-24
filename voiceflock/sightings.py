@@ -18,9 +18,9 @@ def add(conn: sqlite3.Connection, items: list[dict], default_device: str | None 
             continue
         at_ms = int(it.get("at_ms") or time.time() * 1000)
         cur = conn.execute(
-            "INSERT OR IGNORE INTO sightings(at_ms, person_id, name, probability, flagged, kind, source_id, device) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO sightings(at_ms, person_id, name, probability, flagged, kind, source_id, device, session_name) VALUES(?,?,?,?,?,?,?,?,?)",
             (at_ms, it.get("person_id"), str(it["name"])[:200], float(it.get("probability") or 0), int(bool(it.get("flagged"))), kind,
-             it.get("source_id"), (it.get("device") or default_device or None)))
+             it.get("source_id"), (it.get("device") or default_device or None), (str(it.get("session") or "")[:200] or None)))
         n += cur.rowcount
     return n
 

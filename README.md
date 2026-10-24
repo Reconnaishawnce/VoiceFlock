@@ -286,6 +286,13 @@ library; **keep a 30 s clip around each alert** (opt-in) and send it to the lapt
 row; and **open the whole laptop app in the phone's browser** (queue and progress, naming, search). The laptop
 side of this is `POST /api/identify` (a clip in, candidates out, optional `add:<id>` / `enroll:<name>`).
 
+**Event sessions (phone).** Under the microphone, *Start a session for an event…*: give it a name and place,
+optionally tick *Also record the audio*. While it runs, a card shows elapsed time and a live tally (who spoke,
+for how long, how many times). *End session* opens a summary to share as text or CSV; past sessions stay listed
+under the Heard log. Sightings made during a session carry its name to the laptop ("heard by the phone at
+Finance committee"). A recorded session can be sent to the laptop afterwards, where it becomes a normal
+recording with diarization and a transcript.
+
 **Getting the library to the phone without touching the firewall.** Settings → *Auto-export phone library
 to* a folder that syncs to the cloud (Dropbox, Google Drive, OneDrive). The file is rewritten whenever voices,
 packages or alerts change. Share that file's link once and paste it into the app's Settings → *Library link*;

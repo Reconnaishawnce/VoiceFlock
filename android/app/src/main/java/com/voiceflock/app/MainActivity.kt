@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
         Alerts.initTts(this)
         if (AppState.gallery.value == null) AppState.gallery.value = Gallery.load(this)
         if (AppState.sightings.value.isEmpty()) AppState.sightings.value = Sightings.load(this)
+        Sessions.load(this)
         handleShare(intent)
         handleAutostart(intent)
         autoFetch()

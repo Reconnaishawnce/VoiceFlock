@@ -76,6 +76,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sources ADD COLUMN recorded_on TEXT")
     if "batch_id" not in _columns(conn, "sources"):
         conn.execute("ALTER TABLE sources ADD COLUMN batch_id INTEGER")
+    if _columns(conn, "sightings") and "session_name" not in _columns(conn, "sightings"):
+        conn.execute("ALTER TABLE sightings ADD COLUMN session_name TEXT")
     if "alert_sound" not in _columns(conn, "persons"):
         conn.execute("ALTER TABLE persons ADD COLUMN alert_sound TEXT")
         conn.execute("ALTER TABLE persons ADD COLUMN alert_message TEXT")
