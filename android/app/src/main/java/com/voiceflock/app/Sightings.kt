@@ -10,7 +10,7 @@ import java.util.Locale
 
 /** One "heard this voice" event. Kept on disk (JSON lines) so the log survives restarts. */
 data class Sighting(val at: Long, val personId: Int, val name: String, val probability: Float, val flagged: Boolean,
-                    val device: String = "phone", val source: String? = null)
+                    val device: String = "phone", val source: String? = null, val clip: String? = null)
 
 object Sightings {
     private const val MAX = 600
@@ -20,11 +20,19 @@ object Sightings {
         val f = file(ctx)
         if (!f.exists()) return emptyList()
         return f.readLines().mapNotNull { line ->
-            try { val j = JSONObject(line); Sighting(j.getLong("at"), j.getInt("pid"), j.getString("name"), j.getDouble("p").toFloat(), j.optBoolean("flag", false), j.optString("dev", "phone"), j.optString("src", "").ifEmpty { null }) } catch (_: Exception) { null }
+            try { val j = JSONObject(line); Sighting(j.getLong("at"), j.getInt("pid"), j.getString("name"), j.getDouble("p").toFloat(), j.optBoolean("flag", false), j.optString("dev", "phone"), j.optString("src", "").ifEmpty { null }, j.optString("clip", "").ifEmpty { null }) } catch (_: Exception) { null }
         }.asReversed().take(MAX)
     }
 
-    private fun json(s: Sighting) = JSONObject().put("at", s.at).put("pid", s.personId).put("name", s.name).put("p", s.probability.toDouble()).put("flag", s.flagged).put("dev", s.device).put("src", s.source ?: "")
+    private fun json(s: Sighting) = JSONObject().put("at", s.at).put("pid", s.personId).put("name", s.name).put("p", s.probability.toDouble()).put("flag", s.flagged).put("dev", s.device).put("src", s.source ?: "").put("clip", s.clip ?: "")
+
+    /** Forget a kept clip (file + reference) once it was sent or is not wanted. */
+    @Synchronized
+    fun dropClip(ctx: Context, s: Sighting) {
+        s.clip?.let { try { File(it).delete() } catch (_: Exception) {} }
+        AppState.sightings.value = AppState.sightings.value.map { if (it.at == s.at && it.name == s.name && it.device == s.device) it.copy(clip = null) else it }
+        compact(ctx)
+    }
 
     @Synchronized
     fun add(ctx: Context, s: Sighting) {

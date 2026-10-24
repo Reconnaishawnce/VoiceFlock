@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 
 @Composable
 fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
@@ -47,7 +48,8 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("VoiceFlock", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                if (listening) Pill("listening", VF.Ok, VF.Ok.copy(alpha = .14f)) else Pill("off")
+                val mode by AppState.mode.collectAsStateWithLifecycle()
+                if (listening) Pill(if (mode == "laptop") "via laptop" else "listening", VF.Ok, VF.Ok.copy(alpha = .14f)) else Pill("off")
             }
         }
         item {
@@ -95,17 +97,41 @@ fun ListenScreen(openVoices: () -> Unit, openSettings: () -> Unit) {
     }
 }
 
+private var clipPlayer: android.media.MediaPlayer? = null
 @Composable
 private fun SightingRow(s: Sighting, thr: Float) {
+    val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
+    val scope = rememberCoroutineScope()
     val photo = AppState.gallery.value?.people?.firstOrNull { it.id == s.personId }?.photo
-    RowItem(leading = { Avatar(s.personId, s.name, 38.dp, flagged = s.flagged, photo = photo) },
-        trailing = {
-            Column(horizontalAlignment = Alignment.End) {
-                Text("${(s.probability * 100).toInt()}%", color = probColor(s.probability, thr), fontWeight = FontWeight.SemiBold)
-                if (s.flagged) Icon(Icons.Rounded.NotificationsActive, null, tint = VF.Amber, modifier = Modifier.size(14.dp))
-            }
-        }) {
-        TwoLine(s.name, Sightings.time(s.at) + (if (s.flagged) " · alerted" else "") + when (s.device) { "laptop" -> " · 💻 laptop"; "recording" -> " · 🎞 " + (s.source ?: "recording"); else -> "" })
+    var busy by remember { mutableStateOf(false) }
+    Column {
+        RowItem(leading = { Avatar(s.personId, s.name, 38.dp, flagged = s.flagged, photo = photo) },
+            trailing = {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("${(s.probability * 100).toInt()}%", color = probColor(s.probability, thr), fontWeight = FontWeight.SemiBold)
+                    if (s.flagged) Icon(Icons.Rounded.NotificationsActive, null, tint = VF.Amber, modifier = Modifier.size(14.dp))
+                }
+            }) {
+            TwoLine(s.name, Sightings.time(s.at) + (if (s.flagged) " · alerted" else "") + when (s.device) { "laptop" -> " · 💻 laptop"; "recording" -> " · 🎞 " + (s.source ?: "recording"); else -> "" } + (if (s.clip != null) " · 30 s clip kept" else ""))
+        }
+        if (s.clip != null && java.io.File(s.clip).exists()) Row(Modifier.padding(start = 50.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = {
+                try { clipPlayer?.release(); clipPlayer = android.media.MediaPlayer().apply { setDataSource(s.clip); prepare(); start() } } catch (e: Exception) { android.widget.Toast.makeText(ctx, "Cannot play: ${e.message}", android.widget.Toast.LENGTH_SHORT).show() }
+            }) { Text("▶ Play") }
+            TextButton(enabled = !busy && Sync.connected(prefs), onClick = {
+                busy = true
+                scope.launch {
+                    try {
+                        val name = "Phone clip - ${s.name} - " + java.text.SimpleDateFormat("yyyy-MM-dd HH-mm", java.util.Locale.US).format(java.util.Date(s.at))
+                        Sync.uploadClip(prefs, java.io.File(s.clip), name, "Kept by the phone around an alert for ${s.name} (${(s.probability * 100).toInt()}%). Review queue.")
+                        Sightings.dropClip(ctx, s); android.widget.Toast.makeText(ctx, "Sent to the laptop's review queue", android.widget.Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) { android.widget.Toast.makeText(ctx, "Send failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show() }
+                    busy = false
+                }
+            }) { Text(if (busy) "Sending…" else "Send to laptop") }
+            TextButton(onClick = { Sightings.dropClip(ctx, s) }) { Text("Delete clip", color = VF.Muted) }
+        }
     }
 }
 
@@ -164,11 +190,16 @@ fun IdentifySheet(state: IdentifyState, onClose: () -> Unit) {
             when (state) {
                 is IdentifyState.Listening -> {
                     Text("Identify a voice", style = MaterialTheme.typography.headlineMedium)
-                    Hint("Hold the phone toward whoever is speaking. Stops after 6 s of speech, or 15 s.")
+                    Hint(if (state.remote) "Hold the phone toward whoever is speaking. Eight seconds go to the laptop's full model." else "Hold the phone toward whoever is speaking. Stops after 6 s of speech, or 15 s.")
                     Text("${"%.1f".format(state.speechS)} s", style = MaterialTheme.typography.displayLarge, color = VF.Amber)
-                    ProbBar(state.speechS / 6f, 2f)
-                    Hint("of speech collected · ${state.elapsedS.toInt()} s elapsed")
+                    ProbBar(state.speechS / (if (state.remote) 8f else 6f), 2f)
+                    Hint((if (state.remote) "recorded" else "of speech collected") + " · ${state.elapsedS.toInt()} s elapsed")
                     OutlinedButton(onClick = dismiss, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Cancel") }
+                }
+                is IdentifyState.Asking -> {
+                    Text("Asking the laptop…", style = MaterialTheme.typography.headlineMedium)
+                    Hint("Full speaker model, whole library.")
+                    ProbBar(0.5f, 2f)
                 }
                 is IdentifyState.Failed -> {
                     Text("Couldn't identify", style = MaterialTheme.typography.headlineMedium)
@@ -180,31 +211,53 @@ fun IdentifySheet(state: IdentifyState, onClose: () -> Unit) {
                 }
                 is IdentifyState.Result -> {
                     var newName by remember { mutableStateOf("") }
+                    val scope = rememberCoroutineScope()
+                    var busy by remember { mutableStateOf(false) }
+                    val thrR = state.threshold ?: thr
                     val best = state.top.firstOrNull()
-                    Text(if (best != null && best.probability >= thr) "Sounds like ${best.person.name}" else "Who is this?", style = MaterialTheme.typography.headlineMedium)
-                    Hint("${"%.1f".format(state.speechS)} s of speech, scored against ${g?.people?.size ?: 0} voices. Adding it teaches this phone now and the laptop after “Share my edits”.")
+                    val laptopAct: (String, String) -> Unit = { action, okMsg ->
+                        busy = true
+                        scope.launch {
+                            try { val r = Sync.identify(prefs, state.pcm!!, action); android.widget.Toast.makeText(ctx, r.did ?: okMsg, android.widget.Toast.LENGTH_LONG).show(); onClose() }
+                            catch (e: Exception) { android.widget.Toast.makeText(ctx, "Laptop: ${e.message}", android.widget.Toast.LENGTH_LONG).show() }
+                            busy = false
+                        }
+                    }
+                    Text(if (best != null && best.probability >= thrR) "Sounds like ${best.person.name}" else "Who is this?", style = MaterialTheme.typography.headlineMedium)
+                    if (state.remote) Hint("Laptop: ${"%.1f".format(state.speechS)} s scored with the full model against ${state.gallery} voices. Adding goes straight into the laptop's library.")
+                    else Hint("${"%.1f".format(state.speechS)} s of speech, scored against ${g?.people?.size ?: 0} voices on this phone. Adding it teaches this phone now and the laptop at the next sync.")
                     if (state.top.isEmpty()) Empty("The library is empty. Enroll this voice below.")
                     state.top.forEach { m ->
                         RowItem(leading = { Avatar(m.person.id, m.person.name, 40.dp, photo = m.person.photo) }, trailing = {
-                            TextButton(onClick = {
-                                LocalPrints.addToPerson(ctx, m.person.id, m.person.name, state.embedding); reloadGallery(ctx)
-                                android.widget.Toast.makeText(ctx, "Added a print to ${m.person.name}", android.widget.Toast.LENGTH_SHORT).show(); onClose()
+                            TextButton(enabled = !busy, onClick = {
+                                if (state.remote) laptopAct("add:${m.person.id}", "Added on the laptop")
+                                else { LocalPrints.addToPerson(ctx, m.person.id, m.person.name, state.embedding!!); reloadGallery(ctx)
+                                    android.widget.Toast.makeText(ctx, "Added a print to ${m.person.name}", android.widget.Toast.LENGTH_SHORT).show(); onClose() }
                             }) { Text("This is them") }
                         }) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(m.person.name, fontWeight = FontWeight.Medium)
-                                Text("${(m.probability * 100).toInt()}%", color = probColor(m.probability, thr), fontWeight = FontWeight.SemiBold)
+                                Text("${(m.probability * 100).toInt()}%", color = probColor(m.probability, thrR), fontWeight = FontWeight.SemiBold)
                             }
-                            ProbBar(m.probability, thr, Modifier.padding(top = 4.dp, end = 8.dp), 4.dp)
+                            ProbBar(m.probability, thrR, Modifier.padding(top = 4.dp, end = 8.dp), 4.dp)
                         }
                     }
+                    if (!state.remote && state.pcm != null && Sync.connected(prefs)) OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), onClick = {
+                        busy = true; AppState.identify.value = IdentifyState.Asking
+                        scope.launch {
+                            try { val r = Sync.identify(prefs, state.pcm); AppState.identify.value = IdentifyState.Result(null, r.seconds, r.top, state.pcm, remote = true, gallery = r.gallery, threshold = r.threshold) }
+                            catch (e: Exception) { AppState.identify.value = state; android.widget.Toast.makeText(ctx, "Laptop: ${e.message}", android.widget.Toast.LENGTH_LONG).show() }
+                            busy = false
+                        }
+                    }) { Text("Ask the laptop (full model, whole library)") }
                     Divider()
                     Label("Someone new")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(newName, { newName = it }, placeholder = { Text("Name") }, singleLine = true, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp))
-                        Button(enabled = newName.isNotBlank(), shape = RoundedCornerShape(12.dp), onClick = {
-                            LocalPrints.addNew(ctx, newName, state.embedding); reloadGallery(ctx)
-                            android.widget.Toast.makeText(ctx, "Enrolled ${newName.trim()} on this phone (alerts on)", android.widget.Toast.LENGTH_LONG).show(); onClose()
+                        Button(enabled = newName.isNotBlank() && !busy, shape = RoundedCornerShape(12.dp), onClick = {
+                            if (state.remote) laptopAct("enroll:${newName.trim()}", "Enrolled on the laptop")
+                            else { LocalPrints.addNew(ctx, newName, state.embedding!!); reloadGallery(ctx)
+                                android.widget.Toast.makeText(ctx, "Enrolled ${newName.trim()} on this phone (alerts on)", android.widget.Toast.LENGTH_LONG).show(); onClose() }
                         }) { Text("Enroll") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 
 /** Pulls the gallery JSON and the ONNX model from the laptop. Works on LAN or Tailscale; offline afterwards. */
 object Sync {
@@ -111,9 +112,64 @@ object Sync {
     /** Is the laptop there? Returns a one-line description (version, device, Tailscale name). */
     suspend fun health(prefs: Prefs): String = withContext(Dispatchers.IO) {
         val h = getJson(prefs, "/api/health")
-        val ts = h.optJSONObject("tailscale")?.optString("dns_name", "")?.ifEmpty { null }
+        val tsj = h.optJSONObject("tailscale")
+        val ts = tsj?.optString("dns_name", "")?.ifEmpty { null }
+        prefs.laptopWebUrl = tsj?.optString("https_url", "")?.ifEmpty { null } ?: prefs.serverUrl
         prefs.lastLaptop = "VoiceFlock ${h.optString("version")} · ${h.optString("device")}" + (ts?.let { " · Tailscale $it" } ?: "")
         prefs.lastLaptop
+    }
+
+    private val http by lazy { okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).readTimeout(180, java.util.concurrent.TimeUnit.SECONDS).build() }
+    private fun authHeader(prefs: Prefs): String? = if (prefs.password.isNotEmpty()) "Basic " + Base64.encodeToString("phone:${prefs.password}".toByteArray(), Base64.NO_WRAP) else null
+
+    data class LaptopIdentify(val top: List<Match>, val seconds: Float, val gallery: Int, val threshold: Float, val did: String?)
+
+    /** Send a clip to the laptop: full model, whole library. action = "add:<id>" | "enroll:<name>" | null. */
+    suspend fun identify(prefs: Prefs, pcm: ShortArray, action: String? = null): LaptopIdentify = withContext(Dispatchers.IO) {
+        val bb = java.nio.ByteBuffer.allocate(pcm.size * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN); for (v in pcm) bb.putShort(v)
+        val body = okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart("audio", "clip.pcm", okhttp3.RequestBody.create("application/octet-stream".toMediaTypeOrNull(), bb.array()))
+            .addFormDataPart("device", prefs.deviceId)
+        if (action != null) body.addFormDataPart("action", action)
+        val rb = okhttp3.Request.Builder().url(prefs.serverUrl + "/api/identify").post(body.build())
+        authHeader(prefs)?.let { rb.header("Authorization", it) }
+        http.newCall(rb.build()).execute().use { r ->
+            val text = r.body?.string() ?: ""
+            if (r.code == 401) throw SyncError("password rejected")
+            if (r.code != 200) throw SyncError("laptop replied ${r.code}: ${text.take(160)}")
+            val j = org.json.JSONObject(text); val arr = j.getJSONArray("candidates"); val top = ArrayList<Match>()
+            for (i in 0 until arr.length()) { val c = arr.getJSONObject(i)
+                val p = Person(c.getInt("person_id"), c.getString("name"), c.optString("kind", "named"), c.optBoolean("alert", false), emptyList(),
+                    c.optString("alert_sound", "").ifEmpty { null }.takeIf { it != "null" }, c.optString("alert_message", "").ifEmpty { null }.takeIf { it != "null" })
+                top.add(Match(p, c.optDouble("raw_score", 0.0).toFloat(), c.optDouble("probability", 0.0).toFloat())) }
+            val did = j.optJSONObject("did")?.let { d -> if (d.has("enrolled")) "Enrolled ${d.optString("name")} on the laptop" else "Added a print to ${d.optString("name")} on the laptop" }
+            LaptopIdentify(top, j.optDouble("seconds", 0.0).toFloat(), j.optInt("gallery", 0), j.optDouble("threshold", 0.75).toFloat(), did)
+        }
+    }
+
+    /** A kept alert clip becomes a recording on the laptop (Review queue), with a note saying where it came from. */
+    suspend fun uploadClip(prefs: Prefs, file: java.io.File, name: String, note: String): Int = withContext(Dispatchers.IO) {
+        val body = okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart("mode", "review")
+            .addFormDataPart("files", "$name.wav", okhttp3.RequestBody.create("audio/wav".toMediaTypeOrNull(), file)).build()
+        val rb = okhttp3.Request.Builder().url(prefs.serverUrl + "/api/upload").post(body)
+        authHeader(prefs)?.let { rb.header("Authorization", it) }
+        val sid = http.newCall(rb.build()).execute().use { r ->
+            val text = r.body?.string() ?: ""
+            if (r.code != 200) throw SyncError("laptop replied ${r.code}: ${text.take(160)}")
+            val created = org.json.JSONObject(text).optJSONArray("created")
+            if (created == null || created.length() == 0) throw SyncError("laptop did not accept the clip: ${text.take(160)}")
+            val c = created.getJSONObject(0)
+            if (c.has("duplicate_of")) throw SyncError("the laptop already has this clip")
+            c.getInt("source_id")
+        }
+        try {
+            val pb = okhttp3.RequestBody.create("application/json".toMediaTypeOrNull(), org.json.JSONObject().put("notes", note).toString())
+            val prb = okhttp3.Request.Builder().url(prefs.serverUrl + "/api/sources/$sid").patch(pb)
+            authHeader(prefs)?.let { prb.header("Authorization", it) }
+            http.newCall(prb.build()).execute().close()
+        } catch (_: Exception) {}
+        sid
     }
 
     /** Share → VoiceFlock on a link: queue it on the laptop. */

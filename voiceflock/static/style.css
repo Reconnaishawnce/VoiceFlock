@@ -278,3 +278,11 @@ details.transcript { margin-top:12px; }
 @media (max-width:760px) { .gsearch { order:5; flex-basis:100%; max-width:none; } .srow { grid-template-columns:1fr; } }
 .qc-list { max-height:340px; overflow:auto; } .qc-noise { display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; } .qc-noise audio { max-width:240px; height:30px; margin:0; }
 @media (max-width:760px) { .qc-noise { grid-template-columns:1fr; } }
+/* phone width: candidate tables stack like in the side panel; segment controls scroll sideways */
+@media (max-width:760px) {
+  .cands, .cands tbody, .cands tr, .cands td { display:block; width:100%; } .cands tr:first-child { display:none; }
+  .cands tr { border-bottom:1px solid var(--line); padding:8px 0; } .cands td { border:0; padding:2px 0; } .cands td:nth-child(2) { white-space:normal; }
+  .cands .act { display:flex; gap:6px; margin-top:6px; } .cands .cmp audio { max-width:100%; }
+  .seg { display:flex; overflow-x:auto; max-width:100%; scrollbar-width:none; } .seg::-webkit-scrollbar { display:none; } .seg button { white-space:nowrap; flex:0 0 auto; }
+  .hdr { gap:8px; } .drawer { width:100vw; } body.drawer-open main { padding-right:0; }
+}

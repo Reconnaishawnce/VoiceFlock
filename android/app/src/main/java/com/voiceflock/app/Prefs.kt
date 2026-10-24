@@ -78,6 +78,18 @@ class Prefs(context: Context) {
         messageOverride(p.id) ?: p.alertMessage ?: p.groupIds.firstNotNullOfOrNull { gid -> g.groupById[gid]?.let { groupMessage(it) } }
             ?: defaultMessage.ifBlank { g.defaultMessage }, p.name)
 
+    /** Where listening is processed: "phone" (local model, default) or "laptop" (stream to the laptop's Live mode when connected). */
+    var processing: String
+        get() = sp.getString("processing", "phone") ?: "phone"
+        set(v) = sp.edit().putString("processing", v).apply()
+    /** Keep the last 30 s of audio around each alert as a clip (phone only, until you send it). */
+    var keepAlertClips: Boolean
+        get() = sp.getBoolean("keep_alert_clips", false)
+        set(v) = sp.edit().putBoolean("keep_alert_clips", v).apply()
+    var laptopWebUrl: String
+        get() = sp.getString("laptop_web_url", "") ?: ""
+        set(v) = sp.edit().putString("laptop_web_url", v).apply()
+
     /** Laptop connection (Tailscale or same Wi-Fi): keep both devices in step automatically. */
     var autoSync: Boolean
         get() = sp.getBoolean("auto_sync", true)

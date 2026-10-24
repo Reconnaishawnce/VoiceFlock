@@ -108,6 +108,25 @@ fun SettingsScreen() {
                 Column(Modifier.weight(1f)) { TwoLine("Keep in sync automatically", "When the app opens and every 30 s while listening.") }
                 Switch(auto, { auto = it; prefs.autoSync = it }, colors = switchColors())
             }
+            var proc by remember { mutableStateOf(prefs.processing) }
+            TwoLine("Process listening on", if (proc == "laptop") "The phone streams audio to the laptop's full model and whole library; falls back to the phone when the laptop is unreachable. Uses data." else "The phone's own model and compact library. Works offline.")
+            @OptIn(ExperimentalMaterial3Api::class)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                listOf("phone" to "This phone", "laptop" to "Laptop when connected").forEachIndexed { i, (v, label) ->
+                    SegmentedButton(proc == v, { proc = v; prefs.processing = v }, SegmentedButtonDefaults.itemShape(i, 2),
+                        colors = SegmentedButtonDefaults.colors(activeContainerColor = VF.Amber.copy(alpha = .18f), activeContentColor = VF.Amber, inactiveContainerColor = VF.Surface2, inactiveContentColor = VF.Fg2, activeBorderColor = VF.Line, inactiveBorderColor = VF.Line)) { Text(label) }
+                }
+            }
+            var keep by remember { mutableStateOf(prefs.keepAlertClips) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) { TwoLine("Keep a 30 s clip around each alert", "Stays on this phone until you press Send to laptop on the Heard row, where it becomes a reviewable recording. Delete any time.") }
+                Switch(keep, { keep = it; prefs.keepAlertClips = it }, colors = switchColors())
+            }
+            OutlinedButton(enabled = Sync.connected(prefs), modifier = Modifier.fillMaxWidth(), shape = btnShape, onClick = {
+                val u = prefs.laptopWebUrl.ifEmpty { prefs.serverUrl }
+                try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { Toast.makeText(ctx, "No browser: $u", Toast.LENGTH_LONG).show() }
+            }) { Text("Open the laptop app in the browser") }
+            Hint("The whole VoiceFlock UI: queue and progress, naming, search, recordings. Over HTTPS (tailscale serve on the laptop) the browser microphone works too.")
             TwoLine("Links shared to VoiceFlock go to", null)
             @OptIn(ExperimentalMaterial3Api::class)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {

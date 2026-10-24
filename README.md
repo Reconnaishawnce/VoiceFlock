@@ -278,6 +278,14 @@ laptop hears notify the phone; and sharing a YouTube link from any app to VoiceF
 (Library or Review queue, your choice). For HTTPS, which lets the phone's *browser* use the laptop UI with a
 microphone, run once on the laptop: `tailscale serve --bg 8787`.
 
+**With the laptop connected, the phone can also:** process listening **on the laptop** (Settings → *Laptop
+connection* → *Process listening on: Laptop when connected*; the phone streams audio to the laptop's Live mode,
+full model and whole library, and falls back to the phone when the laptop is unreachable); **ask the laptop**
+from an Identify result for a second opinion with the full model, and add or enroll straight into the laptop's
+library; **keep a 30 s clip around each alert** (opt-in) and send it to the laptop's review queue from the Heard
+row; and **open the whole laptop app in the phone's browser** (queue and progress, naming, search). The laptop
+side of this is `POST /api/identify` (a clip in, candidates out, optional `add:<id>` / `enroll:<name>`).
+
 **Getting the library to the phone without touching the firewall.** Settings → *Auto-export phone library
 to* a folder that syncs to the cloud (Dropbox, Google Drive, OneDrive). The file is rewritten whenever voices,
 packages or alerts change. Share that file's link once and paste it into the app's Settings → *Library link*;

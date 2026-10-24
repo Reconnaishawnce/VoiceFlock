@@ -1674,6 +1674,56 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         }
 
     # ---------------------------------------------------------------- live listening
+    @app.post("/api/identify")
+    async def identify_clip(audio_file: UploadFile = File(..., alias="audio"), action: str | None = Form(None), device: str | None = Form(None),
+                            conn=Depends(get_conn)):
+        """One clip (WAV, or raw int16 PCM at 16 kHz mono) -> top candidates from the full library with the full model.
+        action: 'add:<person_id>' stores the clip as a print for that person; 'enroll:<name>' creates the person. Used by the phone."""
+        import asyncio
+        import tempfile
+
+        import numpy as np
+        data = await audio_file.read()
+        if len(data) < 16000:
+            raise HTTPException(400, "clip too short")
+        if data[:4] == b"RIFF":
+            with tempfile.TemporaryDirectory() as td:
+                src = Path(td) / "clip.wav"; src.write_bytes(data)
+                wav16 = Path(td) / "clip16.wav"
+                audio.to_wav16k(src, wav16)
+                wav = audio.load_wav(wav16)
+        else:
+            wav = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        if len(wav) < audio.SR:
+            raise HTTPException(400, "less than a second of audio")
+        settings = config.Settings(conn)
+        from .embed import Embedder, embed_file
+        emb_model = await asyncio.to_thread(Embedder.get, settings["embedding_model"], settings["device"], config.MODEL_DIR)
+        mean, chunks = await asyncio.to_thread(embed_file, emb_model, wav, audio.SR, float(settings["max_chunk_seconds"]))
+        g = app.state.gcache.get(conn, settings)
+        cands = g.search(mean, k=5)
+        did = None
+        if action:
+            kind, _, arg = action.partition(":")
+            with db.tx(conn):
+                if kind == "add" and arg.isdigit() and db.row(conn, "SELECT id FROM persons WHERE id=?", (int(arg),)):
+                    gallery.add_prints(conn, int(arg), None, None, mean, list(chunks), "phone", len(wav) / audio.SR, None)
+                    gallery.prune_prints(conn, int(arg), int(settings["max_prints_per_person"]))
+                    did = {"added_to": int(arg), "name": db.row(conn, "SELECT name FROM persons WHERE id=?", (int(arg),))["name"]}
+                elif kind == "enroll" and arg.strip():
+                    pid = find_or_create_person(conn, arg.strip())
+                    gallery.add_prints(conn, pid, None, None, mean, list(chunks), "phone", len(wav) / audio.SR, None)
+                    did = {"enrolled": pid, "name": arg.strip()}
+                else:
+                    raise HTTPException(400, "action must be add:<person_id> or enroll:<name>")
+                mobile.mark_dirty(conn)
+                queue_rematch(conn)
+        import base64 as _b64
+        return {"seconds": round(len(wav) / audio.SR, 1), "gallery": len(g.persons), "threshold": float(settings["match_threshold"]),
+                "candidates": [{"person_id": c.person_id, "name": c.name, "kind": c.kind, "probability": c.probability, "raw_score": c.raw_score,
+                                **{k: v for k, v in (g.persons.get(c.person_id) or {}).items() if k in ("alert", "alert_sound", "alert_message")}} for c in cands],
+                "embedding": _b64.b64encode(db.emb_to_blob(gallery.l2n(mean))).decode(), "did": did}
+
     @app.websocket("/ws/live")
     async def ws_live(ws: WebSocket):
         """Binary frames: int16 PCM, 16 kHz mono. Server replies with JSON status/frame messages."""

@@ -14,6 +14,8 @@ object AppState {
     val sightings = MutableStateFlow<List<Sighting>>(emptyList())
     val identify = MutableStateFlow<IdentifyState?>(null)
     val listeningSince = MutableStateFlow(0L)
+    /** "phone" or "laptop": where the current session is being processed. */
+    val mode = MutableStateFlow("phone")
     val speechSeconds = MutableStateFlow(0f)
 
     fun pushLog(line: String) {
