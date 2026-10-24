@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, dossier, feeds, gallery, live, mobile, onnx_export, selfcal, sightings as sightings_mod, stills, suggest, transcribe, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, dossier, feeds, gallery, live, mobile, onnx_export, search as search_mod, selfcal, sightings as sightings_mod, stills, suggest, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -103,6 +103,7 @@ class SourcePatch(BaseModel):
     notes: str | None = None
     review: bool | None = None
     name: str | None = None
+    recorded_on: str | None = None      # YYYY-MM-DD; "" clears
 
 
 class SpeakerPatch(BaseModel):
@@ -712,7 +713,21 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 conn.execute("UPDATE sources SET name=? WHERE id=?", (body.name.strip(), sid))
             if body.review is not None:
                 conn.execute("UPDATE sources SET review=? WHERE id=?", (int(body.review), sid))
+            if body.recorded_on is not None:
+                v = body.recorded_on.strip()
+                if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                    raise HTTPException(400, "recorded_on must be YYYY-MM-DD")
+                conn.execute("UPDATE sources SET recorded_on=? WHERE id=?", (v or None, sid))
         return source_out(conn, db.row(conn, "SELECT * FROM sources WHERE id=?", (sid,)))
+
+    @app.get("/api/search")
+    def search_everything(q: str = "", person_id: int | None = None, date_from: str | None = None, date_to: str | None = None,
+                          min_seconds: float = 0.0, limit: int = 200, conn=Depends(get_conn)):
+        """People, every appearance of a voice (filterable by date and length), recordings, transcript lines, live sightings."""
+        for d in (date_from, date_to):
+            if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+                raise HTTPException(400, "dates must be YYYY-MM-DD")
+        return search_mod.search(conn, q, person_id, date_from or None, date_to or None, min_seconds, min(limit, 1000))
 
     @app.post("/api/sources/{sid}/review")
     def queue_source_for_review(sid: int, conn=Depends(get_conn)):

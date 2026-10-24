@@ -330,6 +330,16 @@ Nothing is named automatically.
 Settings → *Name suggestions* shows whether OCR and the model are ready, and *Suggest names for all
 recordings* backfills the library. Each recording also has a *Suggest names* button.
 
+## Search
+
+The box in the header searches everything and understands plain phrases: `pelosi last 30 days`,
+`warren since 2026-01-01 over 10 min`, `"mass surveillance"`, `this week`, `yesterday`. Results: matching
+**people**; every **appearance** of that voice (date, recording, minutes of speech, a clip, *watch @* the
+longest turn), with totals, *Play all clips* and a CSV export; **transcript lines** containing the words;
+**recordings** by name; and **live sightings**. Explicit filters (voice, from/to dates, minimum minutes)
+sit above the results. Dates come from *recorded on* (the YouTube upload date when known, or set it on
+the recording page), falling back to when the recording was added.
+
 ## Watchlist dossiers
 
 People → **Watchlist** lists everyone who raises an alert (own 🔔 or via a package) as cards: photo, role,

@@ -46,6 +46,7 @@ function render() {
   else if (STATE.tab === "people") { STATE.personKind = id && id.startsWith("pkg") ? "pkg" : "person"; STATE.personId = id ? Number(id.replace("pkg", "")) : null; loadPeople(); }
   else if (STATE.tab === "home") loadHome();
   else if (STATE.tab === "settings") loadSettings();
+  else if (STATE.tab === "search") loadSearch(params);
 }
 window.addEventListener("hashchange", render);
 const openSource = (id) => go(`library/${id}`);
@@ -346,6 +347,7 @@ function sourceView(src) {
     ${player}${timeline(src)}
     <p class="muted" style="font-size:12px">Click a voice in the legend or a block on the timeline: the player jumps to them and a panel opens to name them, without leaving the video.${src.stills_info ? ` · stills: ${src.stills_info.kind === "error" || src.stills_info.kind === "none" ? `<span style="color:var(--warn)">${esc(src.stills_info.error || "none")}</span>` : `${src.stills_info.stills} from ${src.stills_info.kind}`}` : ""}</p>
     ${transcriptBox(src)}
+    <div class="inline" style="align-items:center;margin:6px 0"><label class="muted" style="font-size:12px;display:flex;gap:6px;align-items:center">recorded on <input type="date" value="${esc(src.recorded_on || "")}" style="width:auto;padding:4px 8px" onchange="patchSource(${src.id}, {recorded_on: this.value})"></label><span class="muted" style="font-size:12px">· used by search date filters (YouTube upload date is filled in automatically when known)</span></div>
     <div class="inline" style="align-items:flex-start"><textarea class="notes" id="src-notes" placeholder="Notes for this recording: context, date, who was present, links… (saved when you click away)" onblur="saveSourceNotes(${src.id}, this.value)">${esc(src.notes || "")}</textarea></div>
     <div class="actions">
       ${src.status === "done" && !src.incognito ? `<button class="small primary" onclick="queueReview(${src.id})" title="Put every unnamed voice of this recording in the review queue">${src.review_pending ? `Review queue: ${src.review_pending} to do` : "Add voices to review queue"}</button>` : ""}
@@ -487,6 +489,7 @@ function openSpeaker(id, play = false) {
   if (fresh) setTimeout(() => $(`#drawer #nm-${sp.id}`)?.focus(), 250);
 }
 function closeDrawer() { STATE.drawerSpeaker = null; $("#drawer")?.classList.add("hidden"); document.body.classList.remove("drawer-open"); }
+async function patchSource(id, body) { try { await api(`/api/sources/${id}`, { method: "PATCH", body }); toast("Saved"); } catch (e) { onErr(e); } }
 async function saveSourceNotes(id, v) { try { await api(`/api/sources/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
 async function saveSpeakerNotes(id, v) { try { await api(`/api/speakers/${id}`, { method: "PATCH", body: { notes: v } }); toast("Notes saved"); } catch (e) { onErr(e); } }
 async function setReview(id, status) { try { await api(`/api/speakers/${id}`, { method: "PATCH", body: { review_status: status } }); toast(status === "pending" ? "Added to review queue" : status === "done" ? "Done" : "Skipped"); render(); loadStats(); } catch (e) { onErr(e); } }
@@ -1081,3 +1084,68 @@ $("#import-gallery").addEventListener("change", async () => {
     else if (STATE.tab === "settings") renderSelftest();
   }, 3000);
 })();
+
+
+/* ---------------- SEARCH ---------------- */
+const iso = (d) => d.toISOString().slice(0, 10);
+/** "pelosi last 30 days over 5 min" -> {q:"pelosi", from:..., min:300, chips:[...]} */
+function parseQuery(text) {
+  let q = " " + (text || "") + " "; const f = { chips: [] }; const now = new Date();
+  const take = (re, fn) => { q = q.replace(re, (...m) => { fn(m); return " "; }); };
+  take(/\slast\s+(\d+)\s*(day|days|week|weeks|month|months)\s/i, (m) => { const n = Number(m[1]), u = m[2].toLowerCase(); const d = new Date(now); d.setDate(d.getDate() - n * (u.startsWith("week") ? 7 : u.startsWith("month") ? 30 : 1)); f.from = iso(d); f.chips.push(`last ${n} ${u}`); });
+  take(/\s(today)\s/i, () => { f.from = iso(now); f.chips.push("today"); });
+  take(/\s(yesterday)\s/i, () => { const d = new Date(now); d.setDate(d.getDate() - 1); f.from = f.to = iso(d); f.chips.push("yesterday"); });
+  take(/\sthis\s+(week|month|year)\s/i, (m) => { const d = new Date(now); const u = m[1].toLowerCase(); if (u === "week") d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); else if (u === "month") d.setDate(1); else { d.setMonth(0); d.setDate(1); } f.from = iso(d); f.chips.push(`this ${u}`); });
+  take(/\s(?:since|from|after)\s+(\d{4}-\d{2}-\d{2})\s/i, (m) => { f.from = m[1]; f.chips.push(`since ${m[1]}`); });
+  take(/\s(?:until|to|before)\s+(\d{4}-\d{2}-\d{2})\s/i, (m) => { f.to = m[1]; f.chips.push(`until ${m[1]}`); });
+  take(/\s(?:over|at least|more than|>|min(?:imum)?)\s*(\d+)\s*(?:min|mins|minutes|m)\s/i, (m) => { f.min = Number(m[1]) * 60; f.chips.push(`≥ ${m[1]} min`); });
+  take(/\s(\d+)\+\s*(?:min|mins|minutes)\s/i, (m) => { f.min = Number(m[1]) * 60; f.chips.push(`≥ ${m[1]} min`); });
+  f.q = q.replace(/\s+/g, " ").trim().replace(/^"|"$/g, "");
+  return f;
+}
+let SEARCH = { res: null, playing: -1 };
+async function loadSearch(params) {
+  const raw = decodeURIComponent((params.q || "").replace(/\+/g, " "));
+  const f = parseQuery(raw);
+  if (params.person) f.person = Number(params.person);
+  if (params.from) f.from = params.from; if (params.to) f.to = params.to; if (params.min) f.min = Number(params.min);
+  $("#sq").value = f.q; $("#sfrom").value = f.from || ""; $("#sto").value = f.to || ""; $("#smin").value = f.min ? Math.round(f.min / 60) : "";
+  $("#global-q").value = raw;
+  try {
+    const named = await loadNames();
+    const sel = $("#sperson"); sel.innerHTML = `<option value="">any voice</option>` + named.map((p) => `<option value="${p.id}" ${f.person === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+    $("#schips").innerHTML = f.chips.map((c) => `<span class="pill named">${esc(c)}</span>`).join("");
+    if (!f.q && !f.person && !f.from && !f.min) { $("#search-results").innerHTML = empty("Type a name to see every time that voice spoke, words to search the transcripts, or a recording's name."); $("#search-summary").textContent = ""; return; }
+    $("#search-results").innerHTML = skeleton(6);
+    const qs = new URLSearchParams(); if (f.q) qs.set("q", f.q); if (f.person) qs.set("person_id", f.person); if (f.from) qs.set("date_from", f.from); if (f.to) qs.set("date_to", f.to); if (f.min) qs.set("min_seconds", f.min);
+    const r = await api(`/api/search?${qs}`); SEARCH = { res: r, playing: -1 };
+    renderSearch(r, f);
+  } catch (e) { onErr(e); }
+}
+function searchGo() {
+  const q = $("#sq").value.trim(); const person = $("#sperson").value; const from = $("#sfrom").value, to = $("#sto").value; const min = Number($("#smin").value || 0) * 60;
+  const parts = [`q=${encodeURIComponent(q)}`]; if (person) parts.push(`person=${person}`); if (from) parts.push(`from=${from}`); if (to) parts.push(`to=${to}`); if (min) parts.push(`min=${min}`);
+  go("search?" + parts.join("&"));
+}
+function renderSearch(r, f) {
+  const s = r.summary; const who = r.people.filter((p) => r.person_ids.includes(p.id)).map((p) => p.name);
+  $("#search-summary").textContent = who.length ? `${who.join(", ")} · ${s.n_appearances} appearance${s.n_appearances === 1 ? "" : "s"} in ${s.n_recordings} recording${s.n_recordings === 1 ? "" : "s"} · ${fmtT(s.speech_seconds)} of speech` : (r.q ? `“${r.q}”` : "");
+  const tiles = who.length ? `<div class="stat-row"><div class="tile"><div class="v">${s.n_recordings}</div><div class="l">recordings</div></div><div class="tile"><div class="v">${fmtT(s.speech_seconds)}</div><div class="l">of speech</div></div><div class="tile"><div class="v">${s.n_sightings}</div><div class="l">live hits</div></div><div class="tile"><div class="v">${s.n_lines}</div><div class="l">transcript lines</div></div></div>` : "";
+  const people = r.people.length && !f.person ? `<div class="card"><h3 style="margin-top:0">People</h3>${r.people.map((p) => `<div class="item" style="display:flex;gap:10px;align-items:center"><div style="flex:1"><a class="link" onclick="openPerson(${p.id})"><b>${esc(p.name)}</b></a><span class="pill ${p.kind}">${p.kind === "named" ? "known" : "unnamed"}</span>${p.alert ? ' <span class="bell on">🔔</span>' : ""}${p.role ? ` <span class="muted">· ${esc(p.role)}</span>` : ""}<div class="sub">${p.n_sources} recordings · ${fmtT(p.speech_seconds || 0)} of speech</div></div><button class="small" onclick="go('search?q=&person=${p.id}${f.from ? "&from=" + f.from : ""}${f.to ? "&to=" + f.to : ""}${f.min ? "&min=" + f.min : ""}')">every appearance</button></div>`).join("")}</div>` : "";
+  const apps = r.appearances.length ? `<div class="card"><div class="hdr"><h3 style="margin-top:0">Appearances <span class="muted" style="text-transform:none;letter-spacing:0">· newest first</span></h3><div class="actions" style="margin:0"><button class="small" onclick="playAll()">▶ Play all clips</button><button class="small" onclick="exportSearchCsv()">Export CSV</button></div></div>
+    ${r.appearances.map((a, i) => `<div class="srow" id="sr-${i}"><div class="day">${esc(a.day || "")}</div><div><a class="link" onclick="openSourceAt(${a.source_id}, ${a.watch_at ?? 0})"><b>${esc(a.source_name)}</b></a> <span class="muted">· ${esc(a.person_name)} · ${fmtT(a.speech_seconds || 0)} of speech${a.n_lines ? ` · ${a.n_lines} lines` : ""}${a.assignment && a.assignment !== "auto" ? " · " + esc(a.assignment) : ' · <span title="matched automatically, not confirmed">auto</span>'}</span>${a.clip_url ? `<br><audio controls preload="none" src="${a.clip_url}" onplay="SEARCH.playing=${i};markPlaying(${i})" onended="playNext(${i})"></audio>` : ""}</div><div class="actions" style="margin:0">${a.watch_at != null ? `<button class="small" onclick="openSourceAt(${a.source_id}, ${a.watch_at})">▶ watch @ ${fmtT(a.watch_at)}</button>` : ""}</div></div>`).join("")}</div>` : (r.person_ids.length ? `<div class="card">${empty("No appearances match these filters.")}</div>` : "");
+  const lines = r.lines.length ? `<div class="card"><h3 style="margin-top:0">Said in recordings <span class="muted" style="text-transform:none;letter-spacing:0">· ${r.lines.length} transcript lines</span></h3>${r.lines.map((h) => `<div class="tr-line" onclick="openSourceAt(${h.source_id}, ${h.start_s})"><span class="tr-t">${fmtT(h.start_s)}</span><span class="tr-who">${esc(h.person_name || h.label || "")}</span><span class="tr-x">${esc(h.snippet).replace(/\[/g, "<mark>").replace(/\]/g, "</mark>")} <span class="muted">· ${esc(h.source_name)} · ${esc(h.day || "")}</span></span></div>`).join("")}</div>` : "";
+  const recs = r.recordings.length ? `<div class="card"><h3 style="margin-top:0">Recordings</h3>${r.recordings.map((x) => `<div class="item"><a class="link" onclick="openSource(${x.id})"><b>${esc(x.name)}</b></a> <span class="muted">· ${esc(x.day || "")} · ${x.duration_s ? fmtT(x.duration_s) : "?"} · ${x.n_speakers ?? "?"} voices</span></div>`).join("")}</div>` : "";
+  const sight = r.sightings.length ? `<div class="card"><h3 style="margin-top:0">Heard live</h3>${r.sightings.map(sightingRow).join("")}</div>` : "";
+  const nothing = !people && !apps && !lines && !recs && !sight ? empty("Nothing matches. Try fewer words, or a date range.") : "";
+  $("#search-results").innerHTML = tiles + people + apps + lines + recs + sight + nothing;
+}
+function markPlaying(i) { $$("#search-results .srow").forEach((e, k) => e.classList.toggle("playing", k === i)); }
+function playNext(i) { const next = $(`#sr-${i + 1} audio`); if (next) { next.scrollIntoView({ block: "center", behavior: "smooth" }); next.play().catch(() => {}); } else markPlaying(-1); }
+function playAll() { const a = $("#sr-0 audio") || $("#search-results audio"); if (a) a.play().catch(() => toast("Click a clip's play button once; the rest follow", true)); }
+function exportSearchCsv() {
+  const r = SEARCH.res; if (!r) return;
+  const rows = [["date", "person", "recording", "speech_seconds", "watch_at_s", "assignment", "clip_url"]].concat(r.appearances.map((a) => [a.day || "", a.person_name, a.source_name, Math.round(a.speech_seconds || 0), Math.round(a.watch_at || 0), a.assignment || "", a.clip_url ? location.origin + a.clip_url : ""]));
+  const csv = rows.map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `voiceflock-search-${(r.q || "appearances").replace(/\W+/g, "_")}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+}

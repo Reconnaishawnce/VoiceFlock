@@ -18,6 +18,7 @@
     <button data-tab="live">Live</button>
     <button data-tab="settings">Settings</button>
   </nav>
+  <form class="gsearch" id="gsearch" onsubmit="event.preventDefault(); go('search?q=' + encodeURIComponent(this.q.value.trim()))"><input name="q" id="global-q" placeholder="Search… e.g. pelosi last 30 days over 5 min" autocomplete="off"></form>
   <div class="stats" id="stats"></div>
 </header>
 <div id="banner" class="banner hidden"></div>
@@ -128,6 +129,21 @@
   </section>
 
   <!-- ======================= LIVE ======================= -->
+  <section id="tab-search" class="tab hidden">
+    <div class="card">
+      <div class="hdr"><h2>Search <span class="muted" id="search-summary"></span></h2></div>
+      <div class="sfilters">
+        <input id="sq" placeholder="words, a name, a recording…" onkeydown="if(event.key==='Enter')searchGo()">
+        <select id="sperson"><option value="">any voice</option></select>
+        <label>from <input type="date" id="sfrom"></label><label>to <input type="date" id="sto"></label>
+        <label>at least <input type="number" id="smin" min="0" step="1" style="width:70px" placeholder="0"> min</label>
+        <button class="primary" onclick="searchGo()">Search</button>
+      </div>
+      <div class="chips" id="schips"></div>
+      <p class="muted" style="font-size:12px">Understands phrases: <i>pelosi last 30 days</i>, <i>warren since 2026-01-01 over 10 min</i>, <i>"mass surveillance"</i> (transcripts), <i>this week</i>, <i>yesterday</i>.</p>
+    </div>
+    <div id="search-results"></div>
+  </section>
   <section id="tab-live" class="tab hidden">
     <div class="row">
       <div class="card col narrow">

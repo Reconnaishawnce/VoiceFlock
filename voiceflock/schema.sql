@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS sources (
   transcript_status TEXT,                   -- NULL | queued | running | done | failed
   transcript_language TEXT,
   transcript_info TEXT,                     -- JSON {words, segments, model} or {error}
-  description TEXT                          -- JSON {title, description, channel} fetched for name suggestions
+  description TEXT,                         -- JSON {title, description, channel} fetched for name suggestions
+  recorded_on TEXT                          -- YYYY-MM-DD when the event happened (YouTube upload date, or set by hand); search dates use it
 );
 
 CREATE TABLE IF NOT EXISTS jobs (

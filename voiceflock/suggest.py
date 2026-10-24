@@ -180,6 +180,9 @@ def fetch_metadata(conn: sqlite3.Connection, src: dict) -> dict:
         meta["description"] = (info.get("description") or "")[:4000]
         meta["channel"] = info.get("channel") or info.get("uploader") or ""
         conn.execute("UPDATE sources SET description=? WHERE id=?", (json.dumps({"description": meta["description"], "channel": meta["channel"], "title": meta["title"]}), src["id"]))
+        ud = str(info.get("upload_date") or "")
+        if len(ud) == 8 and ud.isdigit():
+            conn.execute("UPDATE sources SET recorded_on=COALESCE(recorded_on, ?) WHERE id=?", (f"{ud[:4]}-{ud[4:6]}-{ud[6:]}", src["id"]))
     except Exception as e:  # noqa: BLE001
         log.info("metadata fetch failed: %s", e)
     return meta
