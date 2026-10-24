@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, dossier, feeds, gallery, live, mobile, onnx_export, qc, search as search_mod, selfcal, sightings as sightings_mod, sources as sources_mod, stills, suggest, transcribe, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, dossier, faces, feeds, gallery, live, mobile, onnx_export, qc, search as search_mod, selfcal, sightings as sightings_mod, sources as sources_mod, stills, suggest, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -951,8 +951,57 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             info = dossier.save_photo(pid, data)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"not an image: {e}")
-        mobile.mark_dirty(conn)
+        with db.tx(conn):
+            dossier.refresh_face(conn, pid)
+            mobile.mark_dirty(conn)
         return {"ok": True, **info, "photo_url": dossier.photo_urls(pid)[0]}
+
+    @app.post("/api/persons/{pid}/photo/wikipedia")
+    def photo_from_wikipedia(pid: int, conn=Depends(get_conn)):
+        """Use the person's Wikipedia portrait as the dossier photo (free-licensed official portraits for most public figures)."""
+        p = db.row(conn, "SELECT id, name FROM persons WHERE id=?", (pid,))
+        if not p:
+            raise HTTPException(404)
+        w = faces.wikipedia_portrait(p["name"])
+        if not w:
+            raise HTTPException(404, f"No Wikipedia page with a photo found for “{p['name']}”. Try the exact article title as the name, or upload a photo.")
+        try:
+            info = dossier.save_photo(pid, w["image"])
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Wikipedia image could not be read: {e}")
+        with db.tx(conn):
+            dossier.refresh_face(conn, pid)
+            mobile.mark_dirty(conn)
+        return {"ok": True, **info, "photo_url": dossier.photo_urls(pid)[0], "title": w["title"], "description": w["description"], "url": w["url"]}
+
+    @app.post("/api/photos/wikipedia_backfill")
+    def wikipedia_backfill(conn=Depends(get_conn)):
+        """Queue Wikipedia portraits for every known person without a photo (names of two or more words)."""
+        n = conn.execute("SELECT COUNT(*) FROM persons WHERE kind='named'").fetchone()[0]
+        with db.tx(conn):
+            jid = worker.enqueue(conn, None, "wiki_photos", priority=-3, dedupe=True)
+        return {"job_id": jid, "named": n}
+
+    @app.get("/api/faces/status")
+    def faces_status(conn=Depends(get_conn)):
+        st = faces.status(conn)
+        st["enabled"] = bool(config.Settings(conn)["face_match"])
+        st["job"] = db.row(conn, "SELECT id, status, stage, progress, error FROM jobs WHERE type IN ('face_models','wiki_photos') ORDER BY id DESC LIMIT 1")
+        return st
+
+    @app.post("/api/faces/download")
+    def faces_download(conn=Depends(get_conn)):
+        with db.tx(conn):
+            jid = worker.enqueue(conn, None, "face_models", priority=-3, dedupe=True)
+        return {"job_id": jid}
+
+    @app.post("/api/faces/rebuild")
+    def faces_rebuild(conn=Depends(get_conn)):
+        if not faces.available():
+            raise HTTPException(400, "face models are not downloaded yet")
+        with db.tx(conn):
+            conn.execute("DELETE FROM face_prints")
+        return faces.rebuild_missing(conn)
 
     @app.post("/api/persons/{pid}/photo/from_still")
     def photo_from_still(pid: int, body: StillPickIn, conn=Depends(get_conn)):
@@ -973,13 +1022,17 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
             if not ok:
                 raise HTTPException(400, "no frame available: the recording has no local video (YouTube stills are too small for a photo)")
             info = dossier.save_photo(pid, out.read_bytes())
-        mobile.mark_dirty(conn)
+        with db.tx(conn):
+            dossier.refresh_face(conn, pid)
+            mobile.mark_dirty(conn)
         return {"ok": True, **info, "photo_url": dossier.photo_urls(pid)[0]}
 
     @app.delete("/api/persons/{pid}/photo")
     def remove_photo(pid: int, conn=Depends(get_conn)):
         dossier.delete_photo(pid)
-        mobile.mark_dirty(conn)
+        with db.tx(conn):
+            conn.execute("DELETE FROM face_prints WHERE person_id=?", (pid,))
+            mobile.mark_dirty(conn)
         return {"ok": True}
 
     @app.get("/api/persons/{pid}/dossier")

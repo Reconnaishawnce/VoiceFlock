@@ -117,6 +117,8 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
         "label": "Ollama model", "help": "Any chat model you have pulled, e.g. llama3.1:8b, qwen2.5:7b, gemma3:12b."},
     "anthropic_api_key": {"default": "", "type": "secret", "group": "Name suggestions",
         "label": "Anthropic API key", "help": "Only used when Language model = anthropic. Transcript excerpts are sent to the API."},
+    "face_match": {"default": False, "type": "bool", "group": "Name suggestions",
+        "label": "Face matching", "help": "Also compare faces in the video frames with each person's dossier photo (local models, one 275 MB download). Off = voices and captions only."},
     "anthropic_model": {"default": "claude-haiku-5-5", "type": "str", "group": "Name suggestions",
         "label": "Claude model", "help": "claude-haiku-5-5 is cheap and fast; claude-sonnet-5-5 reasons better on messy cases."},
     # --- live listening ---

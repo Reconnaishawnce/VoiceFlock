@@ -322,9 +322,17 @@ def suggest_names(conn: sqlite3.Connection, source_id: int, progress: Progress |
                 for h in lst:
                     add(sid, h["name"], float(h["score"]), "introduced or addressed by name in the transcript")
 
-    # 2. on-screen captions
+    # 2. video frames at the start of each voice's turns: on-screen captions, and (when enabled) faces
+    from . import faces as facemod
     ocr_text: dict[int, list[str]] = defaultdict(list)
-    if settings["suggest_ocr"] and ocr_available() and speakers:
+    face_hits: dict[int, list[str]] = defaultdict(list)
+    do_ocr = bool(settings["suggest_ocr"]) and ocr_available()
+    do_faces = bool(settings["face_match"]) and facemod.available()
+    if (do_ocr or do_faces) and speakers:
+        refs = facemod.references(conn) if do_faces else None
+        if do_faces and refs is not None and not refs[1]:
+            do_faces = False                      # nobody has a reference face yet
+        pname = {int(r["id"]): r["name"] for r in conn.execute("SELECT id, name FROM persons")} if do_faces else {}
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             plan = [(sp["id"], t) for sp in speakers[:12] for t in sample_times(conn, sp["id"], 2)]
@@ -334,15 +342,27 @@ def suggest_names(conn: sqlite3.Connection, source_id: int, progress: Progress |
                 f = by_t.get(round(t, 2))
                 if not f:
                     continue
-                progress("reading captions", i / max(1, len(plan)))
-                try:
-                    for text, conf in ocr_lower_third(f):
-                        n = clean_caption_name(text)
-                        if n:
-                            ocr_text[sid].append(n)
-                            add(sid, n, 4.0 * conf, f"on-screen caption “{text.strip()}” at {_fmt(t)}")
-                except Exception as e:  # noqa: BLE001
-                    log.info("ocr failed on %s: %s", f, e)
+                progress("reading frames", i / max(1, len(plan)))
+                if do_ocr:
+                    try:
+                        for text, conf in ocr_lower_third(f):
+                            n = clean_caption_name(text)
+                            if n:
+                                ocr_text[sid].append(n)
+                                add(sid, n, 4.0 * conf, f"on-screen caption “{text.strip()}” at {_fmt(t)}")
+                    except Exception as e:  # noqa: BLE001
+                        log.info("ocr failed on %s: %s", f, e)
+                if do_faces:
+                    try:
+                        for m in facemod.match_frame(conn, f, refs)[:2]:
+                            nm = pname.get(m["person_id"])
+                            if not nm:
+                                continue
+                            strong = m["cos"] >= facemod.STRONG
+                            face_hits[sid].append(nm)
+                            add(sid, nm, 5.0 if strong else 2.0, f"face on screen {'matches' if strong else 'resembles'} {nm}'s photo ({m['cos']:.2f}) at {_fmt(t)}")
+                    except Exception as e:  # noqa: BLE001
+                        log.info("face match failed on %s: %s", f, e)
 
     # 3. title/description: a bonus for names already supported by something else
     for sid in evidence:
@@ -356,7 +376,7 @@ def suggest_names(conn: sqlite3.Connection, source_id: int, progress: Progress |
         progress("asking the language model", 0.0)
         said = _said(conn, source_id)
         pay = [{"label": sp["label"], "speech_seconds": sp["speech_seconds"] or 0, "n_turns": sp["n_segments"] or 0,
-                "ocr": ocr_text.get(sp["id"], []), "said": said.get(sp["id"], []),
+                "ocr": ocr_text.get(sp["id"], []) + [f"[face matches {n}]" for n in face_hits.get(sp["id"], [])], "said": said.get(sp["id"], []),
                 "hints": [{"name": n, "score": round(v["score"], 1)} for n, v in sorted(evidence[sp["id"]].items(), key=lambda kv: -kv[1]["score"])[:5]]}
                for sp in speakers[:16]]
         try:
@@ -379,7 +399,7 @@ def suggest_names(conn: sqlite3.Connection, source_id: int, progress: Progress |
             n_sugg += bool(out)
             conn.execute("UPDATE source_speakers SET name_hints=? WHERE id=?", (json.dumps(out, ensure_ascii=False) if out else None, sp["id"]))
     return {"speakers": len(speakers), "with_suggestions": n_sugg, "meta_names": meta_names[:10], "ocr_frames": sum(len(v) for v in ocr_text.values()),
-            "llm": llm_used}
+            "face_hits": sum(len(v) for v in face_hits.values()), "llm": llm_used}
 
 
 def _said(conn: sqlite3.Connection, source_id: int) -> dict[int, list[str]]:

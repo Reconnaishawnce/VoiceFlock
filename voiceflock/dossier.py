@@ -34,6 +34,19 @@ def save_photo(pid: int, data: bytes) -> dict:
     return {"width": img.width, "height": img.height}
 
 
+def refresh_face(conn, pid: int) -> None:
+    """Keep the reference face in step with the photo (no-op when face matching is off or models are missing)."""
+    try:
+        from . import config as cfg, faces
+        if faces.available() and cfg.Settings(conn)["face_match"]:
+            faces.rebuild_reference(conn, pid)
+        else:
+            conn.execute("DELETE FROM face_prints WHERE person_id=?", (pid,))
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).info("face reference refresh failed for %s: %s", pid, e)
+
+
 def delete_photo(pid: int) -> None:
     for p in photo_paths(pid):
         try:

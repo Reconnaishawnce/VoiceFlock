@@ -345,6 +345,14 @@ Nothing is named automatically.
 Settings → *Name suggestions* shows whether OCR and the model are ready, and *Suggest names for all
 recordings* backfills the library. Each recording also has a *Suggest names* button.
 
+4. **Face matching (optional, off by default).** Settings → *Name suggestions* → *Face matching*. Reference
+   faces come from each person's dossier photo (upload one, pick a video still, or *from Wikipedia*, which
+   has free-licensed portraits of most public figures; *Fetch Wikipedia photos for known people without
+   one* does the whole library). With the switch on, the frames grabbed for name suggestions are also
+   checked for a matching face, and "face on screen matches Elizabeth Warren's photo (0.61) at 1:02:14"
+   joins the other evidence. Models: InsightFace buffalo_l (SCRFD detector + ArcFace) as ONNX, one 275 MB
+   download from Settings, run locally with onnxruntime. Nothing is auto-named.
+
 ## Bulk import quality control
 
 Library → **Quality report** checks a scope, an import batch (every multi-file upload, channel import and

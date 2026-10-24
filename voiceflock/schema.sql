@@ -262,3 +262,13 @@ CREATE TABLE IF NOT EXISTS distinct_pairs (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (a_id, b_id)
 );
+
+-- Reference face embeddings (ArcFace, 512-d) built from each person's dossier photo; optional face matching.
+CREATE TABLE IF NOT EXISTS face_prints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  embedding BLOB NOT NULL,
+  source TEXT NOT NULL DEFAULT 'photo',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_face_prints_person ON face_prints(person_id);

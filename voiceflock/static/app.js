@@ -196,6 +196,7 @@ function photoControls(p) {
   const stills = (p.heard_in || []).filter((h) => h.still_url && h.media_kind === "video").slice(0, 6);
   return `<label class="small btnlike">${p.photo_url ? "Replace photo" : "Add photo"}<input type="file" accept="image/*" hidden onchange="uploadPhoto(${p.id}, this.files[0])"></label>
     ${stills.length ? `<details class="stillpick"><summary class="small btnlike">use a video still</summary><div class="strip">${stills.map((h) => `<img class="thumb" src="${esc(h.still_url)}" title="${esc(h.name)}" onclick="photoFromStill(${p.id}, ${h.id}, ${h.watch_at ?? 0}, ${JSON.stringify(h.still_url)})">`).join("")}</div></details>` : ""}
+    ${p.kind === "named" ? `<button class="small" onclick="photoFromWikipedia(${p.id})" title="the person's Wikipedia portrait, if they have an article">from Wikipedia</button>` : ""}
     ${p.photo_url ? `<button class="small" onclick="removePhoto(${p.id})">remove photo</button>` : ""}`;
 }
 async function uploadPhoto(pid, file) { if (!file) return; const fd = new FormData(); fd.append("file", file); try { const r = await fetch(`/api/persons/${pid}/photo`, { method: "POST", body: fd }); if (!r.ok) throw new Error((await r.json()).detail || r.statusText); toast("Photo saved"); render(); } catch (e) { onErr(e); } }
@@ -368,6 +369,24 @@ function suggestBtn(src) {
 }
 async function suggestNow(sid) { try { await api(`/api/sources/${sid}/suggest`, { method: "POST" }); toast("Name suggestions queued"); render(); } catch (e) { onErr(e); } }
 async function suggestBackfill() { try { const r = await api("/api/suggest/backfill", { method: "POST" }); toast(`Queued name suggestions for ${r.queued} recordings`); } catch (e) { onErr(e); } }
+async function renderFaces() {
+  const el = $("#faces-status"); if (!el) return;
+  try {
+    const st = await api("/api/faces/status");
+    const job = st.job && (st.job.status === "queued" || st.job.status === "running") ? ` · ${esc(st.job.stage || st.job.status)} ${Math.round(st.job.progress || 0)}%` : "";
+    const state = !st.enabled ? "off" : !st.models ? "on, but the face models are not downloaded yet" : `on · ${st.references} reference faces from ${st.photos} photos`;
+    el.innerHTML = `Face matching: <b>${state}</b>${job}
+      <div class="actions" style="margin-top:6px">
+        ${!st.models ? `<button class="small primary" onclick="facesDownload()">Download face models (275 MB, once)</button>` : `<button class="small" onclick="facesRebuild()">Rebuild reference faces</button>`}
+        <button class="small" onclick="wikiBackfill()">Fetch Wikipedia photos for known people without one</button>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:4px">Reference faces come from each person's dossier photo (upload, a video still, or Wikipedia). With the setting on, the frames grabbed for name suggestions are also checked for a matching face; the result is evidence next to the name box, never an automatic name. Turn it on under <i>Name suggestions</i> above.</div>`;
+  } catch (e) { el.textContent = e.message; }
+}
+async function facesDownload() { try { await api("/api/faces/download", { method: "POST" }); toast("Downloading face models in the background"); setTimeout(renderFaces, 1500); } catch (e) { onErr(e); } }
+async function facesRebuild() { try { const r = await api("/api/faces/rebuild", { method: "POST" }); toast(`Reference faces: ${r.built} built, ${r.no_face} photos without a detectable face`); renderFaces(); } catch (e) { onErr(e); } }
+async function wikiBackfill() { try { const r = await api("/api/photos/wikipedia_backfill", { method: "POST" }); toast(`Fetching Wikipedia portraits for up to ${r.named} known people (background)`); setTimeout(renderFaces, 1500); } catch (e) { onErr(e); } }
+async function photoFromWikipedia(pid) { try { const r = await api(`/api/persons/${pid}/photo/wikipedia`, { method: "POST" }); toast(`Photo from Wikipedia: ${r.title}${r.description ? " · " + r.description : ""}`); render(); } catch (e) { onErr(e); } }
 async function renderSuggestStatus() {
   const el = $("#suggest-status"); if (!el) return;
   try {
@@ -956,7 +975,7 @@ async function loadSettings() {
     f.innerHTML = Object.entries(groups).map(([g, keys]) => `<div class="grp">${g}</div>` + keys.map((k) => { const s = SPECS[k], v = SETTINGS[k];
       const input = s.type === "bool" ? `<input type="checkbox" name="${k}" ${v ? "checked" : ""}>` : s.type === "secret" ? `<input type="password" name="${k}" value="${esc(v)}" autocomplete="off">` : s.type === "float" ? `<input type="number" step="0.01" name="${k}" value="${v}">` : s.type === "int" ? `<input type="number" step="1" name="${k}" value="${v}">` : (k === "alert_default_message" ? `<textarea name="${k}" rows="2">${esc(v)}</textarea>` : `<input name="${k}" value="${esc(v)}">`);
       return `<div class="f"><label>${esc(s.label)}<small>${esc(s.help)}</small></label>${input}</div>`; }).join("")).join("");
-    renderSelftest(); renderPhone(); renderVersion(); renderSuggestStatus();
+    renderSelftest(); renderPhone(); renderVersion(); renderSuggestStatus(); renderFaces();
     const st = await api("/api/stats");
     $("#stills-info").innerHTML = `Stills on disk: <b>${st.stills_mb} MB</b>. <button class="small" onclick="stillsBackfill()">Make stills for existing recordings</button> <button class="small" onclick="transcribeBackfill()">Transcribe existing recordings (${st.untranscribed} left)</button> <span class="muted">(videos and YouTube recordings processed before stills existed)</span>`;
     $("#calib-info").textContent = `scoring mode: ${st.score_mode} (cohort ${st.cohort_size}, min ${SETTINGS.cohort_min_size}) · raw a=${st.calibration.raw.a.toFixed(2)} b=${st.calibration.raw.b.toFixed(2)}`;

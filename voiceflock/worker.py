@@ -96,6 +96,34 @@ def run_job(conn, job: dict, gcache: gallery.GalleryCache) -> None:
         elif job["type"] == "suggest_names":
             from .suggest import suggest_names
             result = suggest_names(conn, int(job["source_id"]), progress)
+        elif job["type"] == "face_models":
+            from . import faces
+            result = faces.download_models(progress)
+            result.update(faces.rebuild_missing(conn, progress))
+        elif job["type"] == "wiki_photos":
+            from . import dossier, faces
+            rows = conn.execute("SELECT id, name FROM persons WHERE kind='named' ORDER BY id").fetchall()
+            got = none = skipped = 0
+            for i, r in enumerate(rows):
+                progress("Wikipedia portraits", i / max(1, len(rows)))
+                if dossier.photo_paths(int(r["id"]))[0].exists() or len(str(r["name"]).split()) < 2:
+                    skipped += 1
+                    continue
+                w = faces.wikipedia_portrait(str(r["name"]))
+                if not w:
+                    none += 1
+                    continue
+                try:
+                    dossier.save_photo(int(r["id"]), w["image"])
+                    with db.tx(conn):
+                        dossier.refresh_face(conn, int(r["id"]))
+                    got += 1
+                except Exception:
+                    none += 1
+            result = {"photos": got, "not_found": none, "skipped": skipped}
+            from . import mobile
+            with db.tx(conn):
+                mobile.mark_dirty(conn)
         elif job["type"] == "export_model":
             from .onnx_export import export
             progress("exporting ECAPA to ONNX", 0.1)
