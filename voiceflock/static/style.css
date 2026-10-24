@@ -276,3 +276,5 @@ details.transcript { margin-top:12px; }
 .srow.playing { background:rgba(232,179,90,.08); border-left:3px solid var(--acc); padding-left:8px; margin-left:-11px; }
 .stat-row { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 6px; } .stat-row .tile { padding:10px 14px; } .stat-row .tile .v { font-size:24px; }
 @media (max-width:760px) { .gsearch { order:5; flex-basis:100%; max-width:none; } .srow { grid-template-columns:1fr; } }
+.qc-list { max-height:340px; overflow:auto; } .qc-noise { display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; } .qc-noise audio { max-width:240px; height:30px; margin:0; }
+@media (max-width:760px) { .qc-noise { grid-template-columns:1fr; } }

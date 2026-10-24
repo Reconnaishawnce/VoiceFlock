@@ -101,6 +101,10 @@
             <a class="link" href="/api/export/matches.csv">Export CSV</a></div></div>
         <div id="jobs"></div>
         <div id="tr-hits"></div><div id="sources"></div>
+        <details id="qc-panel"><summary><b>Quality report</b> <span class="muted">· what went wrong in an import, noise voices, clean-up</span></summary>
+          <div class="actions" style="margin:8px 0"><select id="qc-scope" style="width:auto;min-width:260px"><option value="days:7">Last 7 days</option><option value="days:30">Last 30 days</option><option value="all">Everything</option></select><button class="small primary" onclick="runQc()">Run report</button><span class="muted" id="qc-msg"></span></div>
+          <div id="qc-out"></div>
+        </details>
         <details id="problems-box" class="hidden"><summary>Problems <span id="problems-count" class="muted"></span></summary><div id="problems"></div></details>
       </div>
     </div>

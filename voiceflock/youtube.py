@@ -101,15 +101,17 @@ def mark_imported(conn: sqlite3.Connection, videos: list[Video]) -> None:
 
 def import_videos(conn: sqlite3.Connection, videos: list[Video], mode: str = "bulk", incognito: bool = False,
                   prefix: str | None = None) -> dict:
+    from .sources import new_batch
     created, skipped = [], 0
     with db.tx(conn):
+        batch_id = new_batch(conn, f"YouTube: {prefix or 'import'} ({len(videos)} videos)", "youtube") if len(videos) > 1 else None
         for v in videos:
             if conn.execute("SELECT 1 FROM sources WHERE url=? AND status!='failed'", (v.url,)).fetchone():
                 skipped += 1
                 continue
             name = f"{prefix} – {v.title}" if prefix else v.title
-            sid = conn.execute("INSERT INTO sources(name, url, mode, incognito, status) VALUES(?,?,?,?,'queued')",
-                               (name[:200], v.url, mode, int(incognito))).lastrowid
+            sid = conn.execute("INSERT INTO sources(name, url, mode, incognito, status, batch_id) VALUES(?,?,?,?,'queued',?)",
+                               (name[:200], v.url, mode, int(incognito), batch_id)).lastrowid
             worker.enqueue(conn, int(sid), priority=-1)
             created.append(int(sid))
     return {"created": created, "skipped": skipped}

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -91,6 +92,7 @@ def poll_feed(conn: sqlite3.Connection, feed: dict) -> dict:
     with db.tx(conn):
         if title and not feed["title"]:
             conn.execute("UPDATE feeds SET title=? WHERE id=?", (title, fid))
+        batch_id = None
         for i, it in enumerate(items):
             if conn.execute("SELECT 1 FROM feed_items WHERE feed_id=? AND guid=?", (fid, it.guid)).fetchone():
                 continue
@@ -104,8 +106,11 @@ def poll_feed(conn: sqlite3.Connection, feed: dict) -> dict:
             name = it.title or it.url
             if title:
                 name = f"{title} – {name}"
-            src = conn.execute("INSERT INTO sources(name, url, mode, incognito, feed_id, status) VALUES(?,?,?,?,?,'queued')",
-                               (name[:200], it.url, feed["mode"], int(feed["incognito"]), fid)).lastrowid
+            if batch_id is None:
+                from .sources import new_batch
+                batch_id = new_batch(conn, f"Feed: {title or feed.get('url') or fid} {time.strftime('%Y-%m-%d')}", "feed")
+            src = conn.execute("INSERT INTO sources(name, url, mode, incognito, feed_id, status, batch_id) VALUES(?,?,?,?,?,'queued',?)",
+                               (name[:200], it.url, feed["mode"], int(feed["incognito"]), fid, batch_id)).lastrowid
             worker.enqueue(conn, int(src), priority=-1)  # uploads first, feed catch-up after
             conn.execute("UPDATE feed_items SET source_id=? WHERE id=?", (src, cur.lastrowid))
             new += 1

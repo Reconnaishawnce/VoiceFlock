@@ -330,6 +330,21 @@ Nothing is named automatically.
 Settings → *Name suggestions* shows whether OCR and the model are ready, and *Suggest names for all
 recordings* backfills the library. Each recording also has a *Suggest names* button.
 
+## Bulk import quality control
+
+Library → **Quality report** checks a scope, an import batch (every multi-file upload, channel import and
+feed poll is one), the last 7 or 30 days, or everything, and lists: failed recordings with their error,
+recordings with no usable voices, duplicates (same file, URL or name+length as an earlier one), very short
+files, files that are mostly music or silence, files with low SNR throughout, clipping, and crowded
+recordings; then **voices that look like noise** (short, noisy, clipped auto-clustered "speakers": laughter,
+applause, crosstalk) with the prints they contributed, and **low-quality prints** that slipped in before
+the quality gate. Each list has one-click clean-up with a count (ignore the noise voices, delete failed /
+empty / duplicate / very short recordings, drop the low-quality prints); every action re-matches the
+library afterwards and each ignored voice keeps an Undo on its recording page.
+
+Prevention: Settings → Quality → *Minimum quality to enter the library* (default 35). Speakers below it are
+still listed and matched against known people but never create or grow an unnamed voice.
+
 ## Search
 
 The box in the header searches everything and understands plain phrases: `pelosi last 30 days`,

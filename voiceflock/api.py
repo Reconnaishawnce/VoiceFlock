@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, admin, audio, config, db, dossier, feeds, gallery, live, mobile, onnx_export, search as search_mod, selfcal, sightings as sightings_mod, stills, suggest, transcribe, transfer, worker, youtube
+from . import __version__, admin, audio, config, db, dossier, feeds, gallery, live, mobile, onnx_export, qc, search as search_mod, selfcal, sightings as sightings_mod, sources as sources_mod, stills, suggest, transcribe, transfer, worker, youtube
 
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).with_name("static")
@@ -71,6 +71,12 @@ class StillPickIn(BaseModel):
     source_id: int
     t: float = 0.0
     still_url: str | None = None
+
+
+class QcApplyIn(BaseModel):
+    actions: list[str]
+    batch_id: int | None = None
+    days: int | None = None
 
 
 class PairIn(BaseModel):
@@ -516,14 +522,18 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
         if mode == "enroll" and not (person_name or "").strip():
             raise HTTPException(400, "enroll mode needs a person name")
         out = []
+        batch_id = None
+        if len(files) > 1:
+            with db.tx(conn):
+                batch_id = sources_mod.new_batch(conn, f"Upload {time.strftime('%Y-%m-%d %H:%M')} ({len(files)} files)", "upload")
         for f in files:
             fname = _safe_name(f.filename or "upload")
             if Path(fname).suffix.lower() not in audio.AUDIO_EXTS:
                 out.append({"name": fname, "error": "unsupported file type"})
                 continue
             with db.tx(conn):
-                cur = conn.execute("INSERT INTO sources(name, original_filename, mode, incognito, status, review) VALUES(?,?,?,?, 'queued', ?)",
-                                   (Path(fname).stem, fname, mode, int(incognito), int(review)))
+                cur = conn.execute("INSERT INTO sources(name, original_filename, mode, incognito, status, review, batch_id) VALUES(?,?,?,?, 'queued', ?, ?)",
+                                   (Path(fname).stem, fname, mode, int(incognito), int(review), batch_id))
                 sid = int(cur.lastrowid)
             dest = config.ORIG_DIR / f"{sid}_{fname}"
             with open(dest, "wb") as fh:
@@ -729,6 +739,30 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
                 raise HTTPException(400, "dates must be YYYY-MM-DD")
         return search_mod.search(conn, q, person_id, date_from or None, date_to or None, min_seconds, min(limit, 1000))
 
+    @app.get("/api/batches")
+    def list_batches(limit: int = 30, conn=Depends(get_conn)):
+        return {"batches": db.rows(conn, "SELECT b.*, (SELECT COUNT(*) FROM sources s WHERE s.batch_id=b.id AND s.status!='deleted') AS n,"
+                                         " (SELECT COUNT(*) FROM sources s WHERE s.batch_id=b.id AND s.status='done') AS n_done,"
+                                         " (SELECT COUNT(*) FROM sources s WHERE s.batch_id=b.id AND s.status='failed') AS n_failed"
+                                         " FROM import_batches b ORDER BY b.id DESC LIMIT ?", (limit,))}
+
+    @app.get("/api/qc")
+    def qc_report(batch_id: int | None = None, days: int | None = None, conn=Depends(get_conn)):
+        """Quality report for a batch or the last N days (neither = the whole library)."""
+        return qc.report(conn, batch_id, days)
+
+    @app.post("/api/qc/apply")
+    def qc_apply(body: QcApplyIn, conn=Depends(get_conn)):
+        """Clean-ups: ignore_noise, prune_low_prints, delete_failed, delete_empty, delete_duplicates, delete_short."""
+        allowed = {"ignore_noise", "prune_low_prints", "delete_failed", "delete_empty", "delete_duplicates", "delete_short"}
+        bad = [a for a in body.actions if a not in allowed]
+        if bad:
+            raise HTTPException(400, f"unknown action(s): {', '.join(bad)}")
+        done = qc.apply(conn, body.actions, body.batch_id, body.days)
+        with db.tx(conn):
+            queue_rematch(conn)
+        return {"done": done}
+
     @app.post("/api/sources/{sid}/review")
     def queue_source_for_review(sid: int, conn=Depends(get_conn)):
         """Put every voice of this recording that isn't a confirmed/named/enrolled person into the review queue."""
@@ -817,40 +851,10 @@ def create_app(run_worker: bool = True, workers: int = 1) -> FastAPI:
 
     @app.delete("/api/sources/{sid}")
     def delete_source(sid: int, conn=Depends(get_conn)):
-        s = db.row(conn, "SELECT * FROM sources WHERE id=?", (sid,))
-        if not s:
+        if not sources_mod.delete_source(conn, sid):
             raise HTTPException(404)
-        with db.tx(conn):
-            pids = [r["person_id"] for r in conn.execute(
-                "SELECT DISTINCT person_id FROM source_speakers WHERE source_id=? AND person_id IS NOT NULL", (sid,))]
-            clips = [r["clip_path"] for r in conn.execute("SELECT clip_path FROM source_speakers WHERE source_id=?", (sid,))]
-            conn.execute("DELETE FROM prints WHERE source_id=?", (sid,))
-            conn.execute("DELETE FROM transcript_segments WHERE source_id=?", (sid,))
-            conn.execute("DELETE FROM source_speakers WHERE source_id=?", (sid,))
-            conn.execute("UPDATE jobs SET status='cancelled' WHERE source_id=? AND status='queued'", (sid,))
-            conn.execute("DELETE FROM sources WHERE id=?", (sid,))
-            for p in pids:
-                delete_empty_provisional(conn, p)
-            db.bump_prints_version(conn)
-        try:
-            transcribe.raw_path(sid).unlink(missing_ok=True)
-        except OSError:
-            pass
-        for p in (s["orig_path"], s["wav_path"]):
-            if p and Path(p).exists():
-                try:
-                    Path(p).unlink()
-                except OSError:
-                    pass
-        if s["url"]:
-            shutil.rmtree(config.ORIG_DIR / f"url_{sid}", ignore_errors=True)
-        for c in clips:
-            if c:
-                (config.CLIP_DIR / c).unlink(missing_ok=True)
-        stills.delete_stills(sid)
-        return {"deleted": sid}
+        return {"ok": True}
 
-    # ---------------------------------------------------------------- jobs
     @app.get("/api/jobs")
     def list_jobs(status: str | None = None, limit: int = 50, conn=Depends(get_conn)):
         q = ("SELECT j.*, s.name AS source_name, s.mode AS source_mode, s.enroll_person_id FROM jobs j LEFT JOIN sources s ON s.id=j.source_id")

@@ -221,6 +221,16 @@ def decide_and_record(conn: sqlite3.Connection, source: dict, results: list[Spea
             r.decision = "incognito"
             continue
 
+        if r.quality < float(settings["min_print_quality"]):
+            # Too noisy / short / clipped to become a reference print: list it, match it, but keep it out of the library.
+            if top is not None and top.kind == "provisional" and top.probability >= cluster_thr:
+                conn.execute("UPDATE matches SET status='auto' WHERE source_speaker_id=? AND rank=1", (r.source_speaker_id,))
+                conn.execute("UPDATE source_speakers SET person_id=?, assignment='auto' WHERE id=?", (top.person_id, r.source_speaker_id))
+                r.decision, r.person_id = "clustered", top.person_id
+            else:
+                r.decision = "unknown"
+            continue
+
         if top is not None and top.kind == "provisional" and top.probability >= cluster_thr:
             # Same unnamed voice heard again: grow its print set so it keeps getting better.
             gallery.add_prints(conn, top.person_id, sid, r.source_speaker_id, r.mean_emb, list(r.chunk_embs),

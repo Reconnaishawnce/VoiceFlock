@@ -37,7 +37,15 @@ CREATE TABLE IF NOT EXISTS sources (
   transcript_language TEXT,
   transcript_info TEXT,                     -- JSON {words, segments, model} or {error}
   description TEXT,                         -- JSON {title, description, channel} fetched for name suggestions
-  recorded_on TEXT                          -- YYYY-MM-DD when the event happened (YouTube upload date, or set by hand); search dates use it
+  recorded_on TEXT,                         -- YYYY-MM-DD when the event happened (YouTube upload date, or set by hand); search dates use it
+  batch_id INTEGER                          -- import batch (multi-file upload, channel import, feed poll) for quality reports
+);
+
+CREATE TABLE IF NOT EXISTS import_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,                       -- upload | youtube | feed
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS jobs (

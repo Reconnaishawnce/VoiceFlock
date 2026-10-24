@@ -275,7 +275,7 @@ async function loadLibrary() {
   if (STATE.sourceId) { $("#lib-list").classList.add("hidden"); $("#lib-detail").classList.remove("hidden"); return loadSourceDetail(STATE.sourceId); }
   $("#lib-detail").classList.add("hidden"); $("#lib-detail").innerHTML = ""; YTP = null; $("#lib-list").classList.remove("hidden");
   if (!$("#sources").innerHTML) $("#sources").innerHTML = skeleton(5);
-  loadFeeds();
+  loadFeeds(); loadBatches();
   try {
     const qs = encodeURIComponent($("#source-search").value.trim());
     const [j, q] = await Promise.all([api(`/api/sources?limit=300&q=${qs}`), api("/api/jobs?limit=60")]);
@@ -1149,3 +1149,57 @@ function exportSearchCsv() {
   const csv = rows.map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `voiceflock-search-${(r.q || "appearances").replace(/\W+/g, "_")}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+
+
+/* ---------------- QUALITY CONTROL ---------------- */
+let QC = { scope: null, rep: null };
+async function loadBatches() {
+  try {
+    const j = await api("/api/batches"); const sel = $("#qc-scope"); if (!sel) return;
+    const keep = sel.value;
+    sel.innerHTML = `<option value="days:7">Last 7 days</option><option value="days:30">Last 30 days</option><option value="all">Everything</option>` +
+      (j.batches.length ? `<optgroup label="Import batches">${j.batches.map((b) => `<option value="batch:${b.id}">${esc(b.name)} · ${b.n} rec${b.n_failed ? `, ${b.n_failed} failed` : ""}</option>`).join("")}</optgroup>` : "");
+    if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  } catch (e) {}
+}
+function qcScope() { const v = $("#qc-scope").value; return v.startsWith("batch:") ? { batch_id: Number(v.slice(6)) } : v.startsWith("days:") ? { days: Number(v.slice(5)) } : {}; }
+async function runQc() {
+  const sc = qcScope(); QC.scope = sc; $("#qc-msg").textContent = "checking…"; $("#qc-out").innerHTML = skeleton(4);
+  try {
+    const qs = new URLSearchParams(sc).toString(); const r = await api(`/api/qc${qs ? "?" + qs : ""}`); QC.rep = r;
+    $("#qc-msg").textContent = ""; renderQc(r);
+  } catch (e) { $("#qc-msg").textContent = ""; onErr(e); }
+}
+function renderQc(r) {
+  const R = r.recordings; const sc = r.scope;
+  const tile = (v, l) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  const list = (items, fmt) => items.length ? `<div class="qc-list">${items.slice(0, 40).map(fmt).join("")}${items.length > 40 ? `<div class="muted">… and ${items.length - 40} more</div>` : ""}</div>` : "";
+  const rec = (x, extra = "") => `<div class="item"><a class="link" onclick="openSource(${x.id})">${esc(x.name)}</a> <span class="muted">${extra}</span> <button class="small danger" onclick="deleteSourceQuiet(${x.id})">delete</button></div>`;
+  const sections = [
+    ["Failed", R.failed, (x) => rec(x, `· ${esc(x.error)}`), "delete_failed", "Delete failed"],
+    ["No usable voices", R.empty, (x) => rec(x, "· processed, nobody passed the minimum speech length"), "delete_empty", "Delete empty"],
+    ["Duplicates", R.duplicates, (x) => rec(x, `· same as <a class="link" onclick="openSource(${x.duplicate_of})">${esc(x.duplicate_name)}</a>`), "delete_duplicates", "Delete duplicates (keep the first)"],
+    ["Very short", R.short, (x) => rec(x, `· ${fmtT(x.duration_s || 0)}`), "delete_short", "Delete very short"],
+    ["Mostly music or silence", R.little_speech, (x) => rec(x, `· ${fmtT(x.speech_seconds || 0)} of speech in ${fmtT(x.duration_s || 0)}`), null],
+    ["Low SNR throughout", R.low_snr, (x) => rec(x, `· best voice ${x.snr_db} dB`), null],
+    ["Clipping", R.clipping, (x) => rec(x, `· ${(x.clip_fraction * 100).toFixed(1)}% of samples clipped`), null],
+    ["Crowded", R.crowded, (x) => rec(x, `· ${x.n_speakers} voices (crowd, panel or over-split)`), null],
+  ];
+  const noise = r.noise_voices;
+  const flags = sections.filter((s) => s[1].length).length + (noise.length ? 1 : 0);
+  $("#qc-out").innerHTML = `<div class="tiles" style="margin:8px 0">${tile(sc.n_sources, "recordings in scope")}${tile(sc.done, "processed")}${sc.queued ? tile(sc.queued, "still queued") : ""}${tile(sc.speech_hours + " h", "of speech")}${tile(noise.length, "noise voices")}${tile(r.low_quality_prints, "low-quality prints")}</div>
+    ${flags === 0 ? `<div class="warnbox" style="color:var(--ok);border-color:rgba(79,192,141,.4);background:rgba(79,192,141,.08)">Clean: nothing to fix in this scope.</div>` : ""}
+    ${sections.map(([title, items, fmt, action, label]) => items.length ? `<h3>${title} <span class="muted" style="text-transform:none;letter-spacing:0">· ${items.length}</span>${action ? ` <button class="small danger" onclick="qcApply('${action}', ${items.length})">${label}</button>` : ""}</h3>${list(items, fmt)}` : "").join("")}
+    ${noise.length ? `<h3>Voices that look like noise <span class="muted" style="text-transform:none;letter-spacing:0">· ${noise.length}, holding ${r.noise_prints} prints</span> <button class="small primary" onclick="qcApply('ignore_noise', ${noise.length})">Ignore all ${noise.length}</button></h3>
+      <p class="muted" style="font-size:12px">Short, noisy or clipped "speakers" (laughter, applause, crosstalk, room noise) that were auto-clustered. Ignoring removes their prints and keeps them out of matching; each has an Undo on its recording page.</p>
+      ${list(noise, (n) => `<div class="item qc-noise"><div><a class="link" onclick="openSpeakerIn(${n.source_id}, ${n.id})">${esc(n.source_name)}</a> · ${esc(n.label)}${n.person_name ? ` → ${esc(n.person_name)}` : ""} <span class="muted">· ${fmtT(n.speech_seconds || 0)} · SNR ${n.snr_db != null ? n.snr_db.toFixed(0) : "?"} dB · quality ${(n.quality_score || 0).toFixed(0)} · ${n.reasons.join(", ")}${n.n_prints ? ` · ${n.n_prints} prints` : ""}</span></div>${n.clip_url ? clip(n.clip_url) : ""}<div class="actions" style="margin:0"><button class="small" onclick="ignoreSpeakerQc(${n.id})">Not a voice</button></div></div>`)}` : ""}
+    ${r.low_quality_prints ? `<h3>Low-quality prints <span class="muted" style="text-transform:none;letter-spacing:0">· ${r.low_quality_prints} auto-clustered prints below quality ${r.thresholds.min_print_quality}</span> <button class="small" onclick="qcApply('prune_low_prints', ${r.low_quality_prints})">Drop them</button></h3><p class="muted" style="font-size:12px">These came in before the quality gate. Dropping them keeps the voices (unless a voice had nothing else) and makes matching stricter.</p>` : ""}`;
+}
+async function qcApply(action, n) {
+  const labels = { ignore_noise: `Ignore ${n} noise voices?`, prune_low_prints: `Drop ${n} low-quality prints?`, delete_failed: `Delete ${n} failed recordings?`, delete_empty: `Delete ${n} recordings with no usable voices?`, delete_duplicates: `Delete ${n} duplicate recordings (the earlier copy stays)?`, delete_short: `Delete ${n} very short recordings?` };
+  if (!confirm(labels[action] || action)) return;
+  try { const r = await api("/api/qc/apply", { method: "POST", body: { actions: [action], ...QC.scope } }); toast("Done: " + Object.entries(r.done).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ")); runQc(); loadStats(); render(); } catch (e) { onErr(e); }
+}
+async function ignoreSpeakerQc(id) { try { await api(`/api/speakers/${id}/ignore`, { method: "POST" }); toast("Ignored"); runQc(); } catch (e) { onErr(e); } }
+async function deleteSourceQuiet(id) { if (!confirm("Delete this recording and everything it added?")) return; try { await api(`/api/sources/${id}`, { method: "DELETE" }); toast("Deleted"); runQc(); loadStats(); } catch (e) { onErr(e); } }
+function openSpeakerIn(sid, spk) { STATE.drawerSpeakerPending = spk; openSource(sid); setTimeout(() => { if ($(`#spk-${spk}`)) { focusSpeaker(spk); openSpeaker(spk); } }, 1500); }

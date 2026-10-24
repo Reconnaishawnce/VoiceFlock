@@ -47,6 +47,8 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "min_speech_seconds": {"default": 3.0, "type": "float", "group": "Quality",
         "label": "Min speech per speaker (s)",
         "help": "Diarized speakers with less speech than this are ignored."},
+    "min_print_quality": {"default": 35.0, "type": "float", "group": "Quality",
+        "label": "Minimum quality to enter the library (0-100)", "help": "Speakers below this never create or grow an unnamed voice (they are still shown and matched). Quality combines speech length, SNR and clipping."},
     "min_enroll_seconds": {"default": 6.0, "type": "float", "group": "Quality",
         "label": "Min speech to save a new unknown voice (s)",
         "help": "Shorter speakers are matched but not saved as new unnamed voices."},
